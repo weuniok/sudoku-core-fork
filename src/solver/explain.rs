@@ -130,10 +130,12 @@ pub enum ExplanationData {
     HiddenSingle {
         cell: usize,
         value: u8,
+        sector: usize,
         sector_name: String,
     },
     /// Locked set (naked/hidden pair/triple/quad)
     LockedSet {
+        sector: usize,
         kind: &'static str, // "Naked" or "Hidden"
         size: usize,
         #[allow(dead_code)]
@@ -238,6 +240,7 @@ impl Finding {
                 cell,
                 value,
                 sector_name,
+                ..
             } => {
                 let pos = idx_to_pos(*cell);
                 format!(
@@ -254,6 +257,7 @@ impl Finding {
                 cells: _,
                 values,
                 sector_name,
+                ..
             } => {
                 let size_name = match size {
                     2 => "Pair",

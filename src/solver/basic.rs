@@ -57,6 +57,7 @@ pub fn find_hidden_single(fab: &CandidateFabric) -> Option<Finding> {
                         inference: InferenceResult::Placement { cell, value: digit },
                         involved_cells: vec![cell],
                         explanation: ExplanationData::HiddenSingle {
+                            sector,
                             cell,
                             value: digit,
                             sector_name: sector_name(sector),
@@ -135,6 +136,7 @@ pub fn find_naked_subset(fab: &CandidateFabric, size: usize) -> Option<Finding> 
                             },
                             involved_cells: involved,
                             explanation: ExplanationData::LockedSet {
+                                sector,
                                 kind: "Naked",
                                 size,
                                 cells: combo,
@@ -213,6 +215,7 @@ pub fn find_hidden_subset(fab: &CandidateFabric, size: usize) -> Option<Finding>
                             },
                             involved_cells: subset_cells.clone(),
                             explanation: ExplanationData::LockedSet {
+                                sector,
                                 kind: "Hidden",
                                 size,
                                 cells: subset_cells.clone(),

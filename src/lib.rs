@@ -27,8 +27,10 @@ pub use hash::{canonical_puzzle_hash, canonical_puzzle_hash_str};
 pub use position::Position;
 pub use puzzle_id::PuzzleId;
 pub use solver::{
-    AlsProofDescriptor, ArithmeticCheck, ArithmeticProof, ArithmeticReplay, ArithmeticRequirement,
-    ArithmeticSearchOptions, ArithmeticSearchResult, ArithmeticState, ArithmeticTerm,
-    ArithmeticTerminal, Difficulty, ForcingSource, Hint, HintType, LinkType, Polarity,
-    ProofCertificate, Solver, Technique,
+    search_teaching_hint, AlsProofDescriptor, ArithmeticCheck, ArithmeticProof, ArithmeticReplay,
+    ArithmeticRequirement, ArithmeticSearchOptions, ArithmeticSearchResult, ArithmeticState,
+    ArithmeticTerm, ArithmeticTerminal, Difficulty, ForcingSource, Hint, HintType, LinkType,
+    Polarity, ProofCertificate, Solver, TeachingCandidate, TeachingGroup, TeachingHint,
+    TeachingHouse, TeachingLink, TeachingNode, TeachingProof, TeachingSearchResult, Technique,
+    TEACHING_TECHNIQUES,
 };

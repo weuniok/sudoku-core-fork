@@ -421,9 +421,31 @@ fn find_aic_with_filter(
     graph: &LinkGraph,
     single_value_only: bool,
 ) -> Option<Finding> {
+    find_aic_with_budget(
+        fab,
+        graph,
+        single_value_only,
+        &mut super::search_budget::SearchBudget::new(u32::MAX),
+    )
+}
+
+pub(crate) fn find_aic_bounded(fab: &CandidateFabric, limit: u32) -> (Option<Finding>, u32, bool) {
+    let graph = build_link_graph(fab);
+    let mut budget = super::search_budget::SearchBudget::new(limit);
+    let finding = find_aic_with_budget(fab, &graph, false, &mut budget);
+    (finding, budget.used, budget.exhausted)
+}
+
+fn find_aic_with_budget(
+    fab: &CandidateFabric,
+    graph: &LinkGraph,
+    single_value_only: bool,
+    budget: &mut super::search_budget::SearchBudget,
+) -> Option<Finding> {
     const MAX_LENGTH: usize = 12;
 
-    let all_nodes: Vec<Node> = graph.strong.keys().copied().collect();
+    let mut all_nodes: Vec<Node> = graph.strong.keys().copied().collect();
+    all_nodes.sort_unstable();
 
     for &start in &all_nodes {
         let mut queue: VecDeque<(Node, bool, Vec<Node>)> = VecDeque::new();
@@ -440,6 +462,9 @@ fn find_aic_with_filter(
         }
 
         while let Some((current, arrived_strong, chain)) = queue.pop_front() {
+            if !budget.visit() {
+                return None;
+            }
             if chain.len() > MAX_LENGTH {
                 continue;
             }

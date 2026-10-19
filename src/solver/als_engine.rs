@@ -34,6 +34,13 @@ fn als_to_descriptor(als: &Als) -> AlsProofDescriptor {
 
 /// Enumerate all ALS in the grid (sizes 1..=5 cells).
 fn enumerate_als(fab: &CandidateFabric) -> Vec<Als> {
+    enumerate_als_bounded(fab, &mut super::search_budget::SearchBudget::new(u32::MAX))
+}
+
+fn enumerate_als_bounded(
+    fab: &CandidateFabric,
+    budget: &mut super::search_budget::SearchBudget,
+) -> Vec<Als> {
     let mut result = Vec::new();
 
     for sector in 0..27 {
@@ -68,6 +75,9 @@ fn enumerate_als(fab: &CandidateFabric) -> Vec<Als> {
             }
             let mut set = (1u32 << n) - 1;
             while set < mask_limit {
+                if !budget.visit() {
+                    return result;
+                }
                 // Extract the cells from this subset
                 let mut cells = Vec::with_capacity(n);
                 let mut union = BitSet::empty();
@@ -167,10 +177,40 @@ pub fn find_als_xz(fab: &CandidateFabric) -> Option<Finding> {
 
 /// Internal: find ALS-XZ with optional technique filter.
 fn find_als_xz_filtered(fab: &CandidateFabric, filter: Option<Technique>) -> Option<Finding> {
-    let all_als = enumerate_als(fab);
+    find_als_xz_budget(
+        fab,
+        filter,
+        &mut super::search_budget::SearchBudget::new(u32::MAX),
+        false,
+    )
+}
+
+pub(crate) fn find_wing_bounded(
+    fab: &CandidateFabric,
+    technique: Technique,
+    limit: u32,
+) -> (Option<Finding>, u32, bool) {
+    let mut budget = super::search_budget::SearchBudget::new(limit);
+    let finding = find_als_xz_budget(fab, Some(technique), &mut budget, true);
+    (finding, budget.used, budget.exhausted)
+}
+
+fn find_als_xz_budget(
+    fab: &CandidateFabric,
+    filter: Option<Technique>,
+    budget: &mut super::search_budget::SearchBudget,
+    teaching_names: bool,
+) -> Option<Finding> {
+    let all_als = enumerate_als_bounded(fab, budget);
+    if budget.exhausted {
+        return None;
+    }
 
     for i in 0..all_als.len() {
         for j in (i + 1)..all_als.len() {
+            if !budget.visit() {
+                return None;
+            }
             let als_a = &all_als[i];
             let als_b = &all_als[j];
 
@@ -219,7 +259,17 @@ fn find_als_xz_filtered(fab: &CandidateFabric, filter: Option<Technique>) -> Opt
                         if a_cells_z.iter().all(|&a| fab.sees(cell, a))
                             && b_cells_z.iter().all(|&b| fab.sees(cell, b))
                         {
-                            let technique = classify_als_pair(als_a, als_b);
+                            // The legacy rating classifier calls a 1+1 ALS pair
+                            // XY-Wing. For teaching, require the conventional
+                            // three bivalue cells with an XY pivot and XZ/YZ wings.
+                            let technique = if teaching_names && filter == Some(Technique::XYWing) {
+                                if !is_teaching_xy_wing(fab, als_a, als_b, z) {
+                                    continue;
+                                }
+                                Technique::XYWing
+                            } else {
+                                classify_als_pair(als_a, als_b)
+                            };
                             if let Some(f) = filter {
                                 if technique != f {
                                     continue;
@@ -255,6 +305,34 @@ fn find_als_xz_filtered(fab: &CandidateFabric, filter: Option<Technique>) -> Opt
         }
     }
     None
+}
+
+fn is_teaching_xy_wing(fab: &CandidateFabric, a: &Als, b: &Als, z: u8) -> bool {
+    let cells: Vec<usize> = a.cells.iter().chain(&b.cells).copied().collect();
+    if cells.len() != 3 || cells.iter().any(|&cell| fab.cell_cands[cell].count() != 2) {
+        return false;
+    }
+    let pivots: Vec<usize> = cells
+        .iter()
+        .copied()
+        .filter(|&cell| !fab.cell_cands[cell].contains(z))
+        .collect();
+    let wings: Vec<usize> = cells
+        .iter()
+        .copied()
+        .filter(|&cell| fab.cell_cands[cell].contains(z))
+        .collect();
+    if pivots.len() != 1 || wings.len() != 2 {
+        return false;
+    }
+    let pivot = pivots[0];
+    let left = fab.cell_cands[pivot].intersection(&fab.cell_cands[wings[0]]);
+    let right = fab.cell_cands[pivot].intersection(&fab.cell_cands[wings[1]]);
+    fab.sees(pivot, wings[0])
+        && fab.sees(pivot, wings[1])
+        && left.count() == 1
+        && right.count() == 1
+        && left != right
 }
 
 /// Classify an ALS pair by cell sizes into SE rating sub-classifications of ALS-XZ.

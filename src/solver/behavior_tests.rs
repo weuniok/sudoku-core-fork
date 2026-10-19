@@ -729,6 +729,7 @@ fn elimination_hint_conversion_preserves_candidates_positions_and_als_evidence()
 fn explanations_name_locked_sets_and_technique_specific_details() {
     for (size, name) in [(2, "Pair"), (3, "Triple"), (4, "Quad"), (5, "Set")] {
         let hint = explanation_hint(ExplanationData::LockedSet {
+            sector: 0,
             kind: "Hidden",
             size,
             cells: vec![0, 1],
@@ -743,6 +744,7 @@ fn explanations_name_locked_sets_and_technique_specific_details() {
     let cases = [
         (
             ExplanationData::HiddenSingle {
+                sector: 0,
                 cell: 80,
                 value: 3,
                 sector_name: "column 9".into(),
