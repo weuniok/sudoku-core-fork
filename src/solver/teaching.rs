@@ -4,7 +4,7 @@ use super::explain::{
     ExplanationData, Finding, InferenceResult, LinkType, Polarity, ProofCertificate,
 };
 use super::fabric::{sector_cells, CandidateFabric};
-use super::{aic_engine, als_engine, basic, fish_engine, Technique};
+use super::{aic_engine, als_engine, basic, fish_engine, uniqueness, Technique};
 use crate::{Grid, Position};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -18,6 +18,38 @@ pub const TEACHING_TECHNIQUES: &[&str] = &[
     "xy_wing",
     "wxyz_wing",
     "aic",
+    "hidden_pair",
+    "naked_triple",
+    "hidden_triple",
+    "naked_quad",
+    "hidden_quad",
+    "finned_x_wing",
+    "swordfish",
+    "finned_swordfish",
+    "jellyfish",
+    "finned_jellyfish",
+    "franken_fish",
+    "siamese_fish",
+    "mutant_fish",
+    "empty_rectangle",
+    "avoidable_rectangle",
+    "unique_rectangle",
+    "hidden_rectangle",
+    "extended_unique_rectangle",
+    "xyz_wing",
+    "w_wing",
+    "x_chain",
+    "sue_de_coq",
+    "als_xz",
+    "als_xy_wing",
+    "als_chain",
+    "death_blossom",
+    "bug",
+    "nishio_forcing_chain",
+    "kraken_fish",
+    "region_forcing_chain",
+    "cell_forcing_chain",
+    "dynamic_forcing_chain",
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -58,12 +90,89 @@ pub struct TeachingGroup {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct TeachingProof {
+pub struct TeachingEvidence {
     pub kind: String,
     pub nodes: Vec<TeachingNode>,
     pub links: Vec<TeachingLink>,
     pub groups: Vec<TeachingGroup>,
     pub rcc_digits: Vec<u8>,
+    pub fins: Vec<TeachingCandidate>,
+    pub group_roles: Vec<String>,
+    pub relations: Vec<TeachingRelation>,
+    pub uniqueness: Option<TeachingUniqueness>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TeachingRelation {
+    pub from: u16,
+    pub to: u16,
+    pub digit: u8,
+    pub kind: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TeachingUniqueness {
+    pub rule: String,
+    pub floor_cells: Vec<u8>,
+    pub roof_cells: Vec<u8>,
+    pub digits: Vec<u8>,
+    pub auxiliary_cells: Vec<u8>,
+    pub conjugates: Vec<TeachingConjugate>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TeachingConjugate {
+    pub house: u8,
+    pub digit: u8,
+    pub cells: Vec<u8>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TeachingProof {
+    #[serde(flatten)]
+    pub evidence: TeachingEvidence,
+    pub branches: Vec<TeachingBranch>,
+}
+impl std::ops::Deref for TeachingProof {
+    type Target = TeachingEvidence;
+    fn deref(&self) -> &Self::Target {
+        &self.evidence
+    }
+}
+impl std::ops::DerefMut for TeachingProof {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.evidence
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TeachingDeduction {
+    pub technique_id: String,
+    pub source_cells: Vec<u8>,
+    pub candidates: Vec<TeachingCandidate>,
+    pub placements: Vec<TeachingCandidate>,
+    pub eliminations: Vec<TeachingCandidate>,
+    pub houses: Vec<TeachingHouse>,
+    pub proof: TeachingEvidence,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TeachingBranch {
+    pub assumption: TeachingCandidate,
+    pub steps: Vec<TeachingDeduction>,
+    pub contradiction: Option<TeachingContradiction>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TeachingContradiction {
+    pub kind: String,
+    pub cells: Vec<u8>,
+    pub house: Option<u8>,
+    pub digit: Option<u8>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -130,6 +239,24 @@ pub fn search_teaching_hint(
     technique: &str,
     work_limit: u32,
 ) -> Result<TeachingSearchResult, String> {
+    search_teaching_hint_with_options(
+        puzzle,
+        values,
+        exclusions,
+        technique,
+        work_limit,
+        TEACHING_TECHNIQUES,
+    )
+}
+
+pub fn search_teaching_hint_with_options(
+    puzzle: &str,
+    values: &str,
+    exclusions: &[u16],
+    technique: &str,
+    work_limit: u32,
+    allowed_techniques: &[&str],
+) -> Result<TeachingSearchResult, String> {
     if puzzle.len() != 81
         || values.len() != 81
         || !puzzle.bytes().all(|b| b.is_ascii_digit())
@@ -138,10 +265,16 @@ pub fn search_teaching_hint(
         || exclusions.iter().any(|&m| m > 511)
         || work_limit == 0
         || work_limit > 2_000_000
-        || !TEACHING_TECHNIQUES.contains(&technique)
+        || allowed_techniques
+            .iter()
+            .any(|id| !TEACHING_TECHNIQUES.contains(id))
     {
         return Err("Invalid hint request".into());
     }
+    if !TEACHING_TECHNIQUES.contains(&technique) || !allowed_techniques.contains(&technique) {
+        return Ok(result("unsupported", 0));
+    }
+    let budget = super::search_budget::RequestBudget::enter(work_limit);
     let mut grid = Grid::from_string(puzzle).ok_or("Invalid original puzzle")?;
     for (cell, byte) in values.bytes().enumerate() {
         let given = puzzle.as_bytes()[cell];
@@ -192,22 +325,38 @@ pub fn search_teaching_hint(
             }
         }
     }
-    let (finding, work, exhausted) = match technique {
-        "naked_single" => (basic::find_naked_single(&fab), 0, false),
-        "hidden_single" => (basic::find_hidden_single(&fab), 0, false),
-        "locked_candidates" => (
-            fish_engine::find_pointing_pair(&fab)
-                .or_else(|| fish_engine::find_box_line_reduction(&fab)),
-            0,
-            false,
-        ),
-        "naked_pair" => (basic::find_naked_subset(&fab, 2), 0, false),
-        "x_wing" => (fish_engine::find_basic_fish(&fab, 2), 0, false),
-        "xy_wing" => als_engine::find_wing_bounded(&fab, Technique::XYWing, work_limit),
-        "wxyz_wing" => als_engine::find_wing_bounded(&fab, Technique::WXYZWing, work_limit),
-        "aic" => aic_engine::find_aic_bounded(&fab, work_limit),
-        _ => unreachable!(),
+    let unique = if requires_uniqueness(technique)
+        || (is_forcing(technique) && allowed_techniques.iter().any(|id| requires_uniqueness(id)))
+    {
+        let count = count_original_solutions(puzzle);
+        let (used, exhausted) = budget.usage();
+        if exhausted {
+            return Ok(result("budget_exhausted", used));
+        }
+        if requires_uniqueness(technique) && count != 1 {
+            return Ok(result(
+                if count == 0 {
+                    "contradictory"
+                } else {
+                    "non_unique_puzzle"
+                },
+                used,
+            ));
+        }
+        count == 1
+    } else {
+        false
     };
+    let mut branches = Vec::new();
+    let finding = if is_forcing(technique) {
+        let (finding, traces) =
+            super::teaching_forcing::find(&grid, technique, allowed_techniques, unique)?;
+        branches = traces;
+        finding
+    } else {
+        find_direct(&fab, technique)
+    };
+    let (work, exhausted) = budget.usage();
     if exhausted {
         return Ok(result("budget_exhausted", work));
     }
@@ -222,14 +371,181 @@ pub fn search_teaching_hint(
             .collect::<Vec<_>>()
             .join(",")
     );
+    let mut hint = adapt(&finding, &fab, technique, position_key)?;
+    hint.proof.branches = branches;
+    if !hint.proof.branches.is_empty() {
+        hint.key = format!(
+            "{}:{}:{:x}",
+            hint.position_key,
+            technique,
+            Sha256::digest(format!("{}:{:?}", hint.key, hint.proof.branches).as_bytes())
+        );
+        for branch in &hint.proof.branches {
+            hint.candidates.push(branch.assumption.clone());
+        }
+        hint.candidates.sort_by_key(|c| (c.cell, c.digit));
+        hint.candidates.dedup();
+    }
     Ok(TeachingSearchResult {
         status: "found".into(),
         work_used: work,
-        hints: vec![adapt(&finding, &fab, technique, position_key)?],
+        hints: vec![hint],
     })
 }
 
-fn adapt(
+pub(super) fn find_direct(fab: &CandidateFabric, technique: &str) -> Option<Finding> {
+    match technique {
+        "naked_single" => basic::find_naked_single(fab),
+        "hidden_single" => basic::find_hidden_single(fab),
+        "locked_candidates" => fish_engine::find_pointing_pair(fab)
+            .or_else(|| fish_engine::find_box_line_reduction(fab)),
+        "naked_pair" => basic::find_naked_subset(fab, 2),
+        "hidden_pair" => basic::find_hidden_subset(fab, 2),
+        "naked_triple" => basic::find_naked_subset(fab, 3),
+        "hidden_triple" => basic::find_hidden_subset(fab, 3),
+        "naked_quad" => basic::find_naked_subset(fab, 4),
+        "hidden_quad" => basic::find_hidden_subset(fab, 4),
+        "x_wing" | "finned_x_wing" | "swordfish" | "finned_swordfish" | "jellyfish"
+        | "finned_jellyfish" | "franken_fish" | "mutant_fish" => {
+            fish_engine::find_teaching_fish(fab, technique)
+        }
+        "siamese_fish" => fish_engine::find_siamese_fish(fab),
+        "xy_wing" => als_engine::find_wing_bounded(fab, Technique::XYWing, u32::MAX).0,
+        "xyz_wing" => als_engine::find_wing_bounded(fab, Technique::XYZWing, u32::MAX).0,
+        "wxyz_wing" => als_engine::find_wing_bounded(fab, Technique::WXYZWing, u32::MAX).0,
+        "als_xz" => als_engine::find_als_xz(fab),
+        "als_xy_wing" => als_engine::find_als_xy_wing_teaching(fab),
+        "als_chain" => als_engine::find_als_chain_teaching(fab),
+        "sue_de_coq" => als_engine::find_sue_de_coq(fab),
+        "death_blossom" => als_engine::find_death_blossom(fab),
+        "empty_rectangle" => aic_engine::find_empty_rectangle(fab),
+        "w_wing" => {
+            let mut finding = aic_engine::find_w_wing(fab)?;
+            let cells = &finding.involved_cells;
+            let InferenceResult::Elimination { values, .. } = &finding.inference else {
+                return None;
+            };
+            let other = values[0];
+            let link = fab.cell_cands[cells[0]].iter().find(|&d| d != other)?;
+            let (a, b) = if fab.sees(cells[0], cells[2]) {
+                (cells[2], cells[3])
+            } else {
+                (cells[3], cells[2])
+            };
+            finding.proof = Some(ProofCertificate::Aic {
+                chain: vec![
+                    (cells[0], other, Polarity::Off),
+                    (cells[0], link, Polarity::On),
+                    (a, link, Polarity::Off),
+                    (b, link, Polarity::On),
+                    (cells[1], link, Polarity::Off),
+                    (cells[1], other, Polarity::On),
+                ],
+                link_types: vec![
+                    LinkType::Strong,
+                    LinkType::WeakInference,
+                    LinkType::Strong,
+                    LinkType::WeakInference,
+                    LinkType::Strong,
+                ],
+            });
+            Some(finding)
+        }
+        "x_chain" => aic_engine::find_x_chain(fab, &aic_engine::build_link_graph(fab)),
+        "aic" => aic_engine::find_aic_bounded(fab, u32::MAX).0,
+        "avoidable_rectangle" => uniqueness::find_avoidable_rectangle(fab),
+        "unique_rectangle" => uniqueness::find_unique_rectangle(fab),
+        "hidden_rectangle" => uniqueness::find_hidden_rectangle(fab),
+        "extended_unique_rectangle" => uniqueness::find_extended_unique_rectangle(fab),
+        "bug" => uniqueness::find_bug(fab),
+        _ => None,
+    }
+}
+
+pub(super) fn is_forcing(id: &str) -> bool {
+    matches!(
+        id,
+        "nishio_forcing_chain"
+            | "kraken_fish"
+            | "cell_forcing_chain"
+            | "region_forcing_chain"
+            | "dynamic_forcing_chain"
+    )
+}
+pub(super) fn requires_uniqueness(id: &str) -> bool {
+    matches!(
+        id,
+        "avoidable_rectangle"
+            | "unique_rectangle"
+            | "hidden_rectangle"
+            | "extended_unique_rectangle"
+            | "bug"
+    )
+}
+
+// Bounded exact solution counting verifies an assumption of uniqueness. It is
+// never used to select a hint, fill the board, or manufacture a deduction.
+fn count_original_solutions(puzzle: &str) -> usize {
+    fn count(values: &mut [u8; 81]) -> usize {
+        if !super::search_budget::tick() {
+            return 0;
+        }
+        let mut best = None;
+        let mut best_mask = 0u16;
+        for cell in 0..81 {
+            if !super::search_budget::tick() {
+                return 0;
+            }
+            if values[cell] != 0 {
+                continue;
+            }
+            let mut mask = 511u16;
+            for peer in 0..81 {
+                if !super::search_budget::tick() {
+                    return 0;
+                }
+                if values[peer] == 0 {
+                    continue;
+                }
+                if cell / 9 == peer / 9
+                    || cell % 9 == peer % 9
+                    || (cell / 27 == peer / 27 && cell % 9 / 3 == peer % 9 / 3)
+                {
+                    mask &= !(1 << (values[peer] - 1));
+                }
+            }
+            if mask == 0 {
+                return 0;
+            }
+            if best.is_none() || mask.count_ones() < best_mask.count_ones() {
+                best = Some(cell);
+                best_mask = mask;
+            }
+        }
+        let Some(cell) = best else {
+            return 1;
+        };
+        let mut total = 0;
+        for digit in 1..=9 {
+            if best_mask & (1 << (digit - 1)) != 0 {
+                values[cell] = digit;
+                total += count(values);
+                values[cell] = 0;
+                if total >= 2 || !super::search_budget::tick() {
+                    break;
+                }
+            }
+        }
+        total.min(2)
+    }
+    let mut values = [0u8; 81];
+    for (cell, digit) in puzzle.bytes().enumerate() {
+        values[cell] = digit - b'0';
+    }
+    count(&mut values)
+}
+
+pub(super) fn adapt(
     finding: &Finding,
     fab: &CandidateFabric,
     technique: &str,
@@ -247,11 +563,18 @@ fn adapt(
     let mut candidates = vec![];
     let mut variant = finding.technique.to_string();
     let mut proof = TeachingProof {
-        kind: "basic".into(),
-        nodes: vec![],
-        links: vec![],
-        groups: vec![],
-        rcc_digits: vec![],
+        branches: vec![],
+        evidence: TeachingEvidence {
+            kind: "basic".into(),
+            nodes: vec![],
+            links: vec![],
+            groups: vec![],
+            rcc_digits: vec![],
+            fins: vec![],
+            group_roles: vec![],
+            relations: vec![],
+            uniqueness: None,
+        },
     };
     match &finding.explanation {
         ExplanationData::HiddenSingle {
@@ -288,8 +611,9 @@ fn adapt(
             digit,
             base_sectors,
             cover_sectors,
-            ..
+            fins,
         }) => {
+            proof.fins = fins.iter().map(|&cell| candidate(cell, *digit)).collect();
             proof.kind = if technique == "locked_candidates" {
                 "intersection"
             } else {
@@ -322,6 +646,50 @@ fn adapt(
                     candidates.extend(fab.cell_cands[cell].iter().map(|d| candidate(cell, d)));
                 }
                 houses.push(house(group.sector, "source"));
+            }
+            proof.group_roles = (0..als_chain.len())
+                .map(|i| {
+                    match (technique, i) {
+                        ("sue_de_coq", 0) => "intersection",
+                        ("death_blossom", 0) => "stem",
+                        _ => "als",
+                    }
+                    .into()
+                })
+                .collect();
+            if technique == "death_blossom" {
+                proof.relations = rcc_values
+                    .iter()
+                    .enumerate()
+                    .map(|(i, &digit)| TeachingRelation {
+                        from: 0,
+                        to: i as u16 + 1,
+                        digit,
+                        kind: "stem".into(),
+                    })
+                    .collect();
+            } else if technique == "sue_de_coq" {
+                for (i, group) in als_chain.iter().enumerate().skip(1) {
+                    for &digit in &group.candidates {
+                        proof.relations.push(TeachingRelation {
+                            from: 0,
+                            to: i as u16,
+                            digit,
+                            kind: "partition".into(),
+                        });
+                    }
+                }
+            } else {
+                proof.relations = rcc_values
+                    .iter()
+                    .enumerate()
+                    .map(|(i, &digit)| TeachingRelation {
+                        from: i as u16,
+                        to: i as u16 + 1,
+                        digit,
+                        kind: "rcc".into(),
+                    })
+                    .collect();
             }
         }
         Some(ProofCertificate::Aic { chain, link_types }) => {
@@ -363,19 +731,128 @@ fn adapt(
                 variant = name.clone();
             }
         }
+        Some(ProofCertificate::Uniqueness {
+            pattern,
+            floor_cells,
+            roof_cells,
+        }) => {
+            proof.kind = "uniqueness".into();
+            let rule = match pattern.as_str() {
+                "UR Type 1" => "ur_type_1",
+                "UR Type 2" => "ur_type_2",
+                "UR Type 3" => "ur_type_3",
+                "UR Type 4" => "ur_type_4",
+                "UR Type 5" => "ur_type_5",
+                "UR Type 6" => "ur_type_6",
+                "Hidden Rectangle" => "hidden_rectangle",
+                "Avoidable Rectangle" => "avoidable_rectangle",
+                "Extended UR" => "extended_unique_rectangle",
+                _ if technique == "bug" => "bug",
+                _ => return Err("Unsupported uniqueness certificate".into()),
+            };
+            let mut digits = Vec::new();
+            for &cell in &sources {
+                if let Some(value) = fab.values[cell] {
+                    digits.push(value);
+                }
+                candidates.extend(fab.cell_cands[cell].iter().map(|d| candidate(cell, d)));
+                if floor_cells.contains(&cell) {
+                    digits.extend(fab.cell_cands[cell].iter());
+                }
+            }
+            digits.sort_unstable();
+            digits.dedup();
+            let mut conjugates = vec![];
+            for sector in 0..27 {
+                if !sources.iter().any(|c| sector_cells(sector).contains(c)) {
+                    continue;
+                }
+                houses.push(house(sector, "source"));
+                for digit in 1..=9 {
+                    let cells: Vec<u8> = sector_cells(sector)
+                        .iter()
+                        .copied()
+                        .filter(|&c| fab.cell_cands[c].contains(digit))
+                        .map(|c| c as u8)
+                        .collect();
+                    if cells.len() == 2 {
+                        conjugates.push(TeachingConjugate {
+                            house: sector as u8,
+                            digit,
+                            cells,
+                        });
+                    }
+                }
+            }
+            proof.uniqueness = Some(TeachingUniqueness {
+                rule: rule.into(),
+                floor_cells: floor_cells.iter().map(|&c| c as u8).collect(),
+                roof_cells: roof_cells.iter().map(|&c| c as u8).collect(),
+                digits,
+                auxiliary_cells: sources
+                    .iter()
+                    .filter(|c| !floor_cells.contains(c) && !roof_cells.contains(c))
+                    .map(|&c| c as u8)
+                    .collect(),
+                conjugates,
+            });
+        }
+        Some(ProofCertificate::Forcing { source, .. }) => {
+            proof.kind = "forcing".into();
+            if let super::explain::ForcingSource::Region { sector, digit } = source {
+                houses.push(house(*sector, "source"));
+                candidates.extend(
+                    sources
+                        .iter()
+                        .filter(|&&c| fab.cell_cands[c].contains(*digit))
+                        .map(|&c| candidate(c, *digit)),
+                );
+                if technique == "kraken_fish" && sources.len() >= 5 {
+                    let corners = &finding.involved_cells[..4];
+                    for &row in &[corners[0] / 9, corners[2] / 9] {
+                        houses.push(house(row, "base"));
+                    }
+                    for &col in &[corners[0] % 9, corners[1] % 9] {
+                        houses.push(house(col + 9, "cover"));
+                    }
+                    proof.fins = finding.involved_cells[4..finding.involved_cells.len() - 1]
+                        .iter()
+                        .map(|&c| candidate(c, *digit))
+                        .collect();
+                }
+            }
+        }
         _ => return Err("Unsupported teaching proof".into()),
     }
     sources.sort_unstable();
     sources.dedup();
     candidates.sort_by_key(|c| (c.cell, c.digit));
     candidates.dedup();
-    let pattern = format!("{sources:?}:{candidates:?}:{placements:?}:{eliminations:?}:{proof:?}");
+    // Preserve v1 identities for the original eight techniques: protocol growth
+    // must not count an already-requested deduction again after upgrading.
+    let original = [
+        "naked_single",
+        "hidden_single",
+        "locked_candidates",
+        "naked_pair",
+        "x_wing",
+        "xy_wing",
+        "wxyz_wing",
+        "aic",
+    ]
+    .contains(&technique);
+    let proof_key = if original {
+        format!("TeachingProof {{ kind: {:?}, nodes: {:?}, links: {:?}, groups: {:?}, rcc_digits: {:?} }}", proof.kind, proof.nodes, proof.links, proof.groups, proof.rcc_digits)
+    } else {
+        format!("{proof:?}")
+    };
+    let pattern = format!("{sources:?}:{candidates:?}:{placements:?}:{eliminations:?}:{proof_key}");
     let key = format!(
         "{position_key}:{technique}:{:x}",
         Sha256::digest(pattern.as_bytes())
     );
     Ok(TeachingHint {
-        schema_version: 1,
+        schema_version: 2,
         technique_id: technique.into(),
         variant,
         position_key,
@@ -439,7 +916,7 @@ mod tests {
     fn direct_search_never_guesses_and_reports_invalid_or_incomplete_positions() {
         let blank = "0".repeat(81);
         assert_eq!(
-            search_teaching_hint(&blank, &blank, &[0; 81], "naked_single", 1)
+            search_teaching_hint(&blank, &blank, &[0; 81], "naked_single", 200_000)
                 .unwrap()
                 .status,
             "not_found"
@@ -456,7 +933,12 @@ mod tests {
                 .status,
             "budget_exhausted"
         );
-        assert!(search_teaching_hint(&blank, &blank, &[0; 81], "backtracking", 1).is_err());
+        assert_eq!(
+            search_teaching_hint(&blank, &blank, &[0; 81], "backtracking", 1)
+                .unwrap()
+                .status,
+            "unsupported"
+        );
         let mut dead = vec![0; 81];
         dead[0] = 511;
         assert_eq!(
