@@ -15,6 +15,8 @@ mod fish_engine;
 mod search_budget;
 mod teaching;
 mod teaching_forcing;
+#[cfg(test)]
+mod teaching_tests;
 mod types;
 mod uniqueness;
 
