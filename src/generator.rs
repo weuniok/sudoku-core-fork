@@ -250,6 +250,11 @@ impl Generator {
         }
     }
 
+    /// Deterministic generation with an explicit retry policy for offline tools.
+    pub fn with_seed_and_config(seed: u64, config: GeneratorConfig) -> Self {
+        Self { config, rng: SimpleRng::with_seed(seed) }
+    }
+
     /// Generate a puzzle targeting a specific SE rating
     pub fn generate_for_se(&mut self, target_se: f32) -> Grid {
         self.config = GeneratorConfig::for_se_rating(target_se);

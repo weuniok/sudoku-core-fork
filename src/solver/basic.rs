@@ -24,6 +24,9 @@ fn sector_name(sector: usize) -> String {
 
 pub fn find_naked_single(fab: &CandidateFabric) -> Option<Finding> {
     for idx in 0..81 {
+        if !super::search_budget::tick() {
+            return None;
+        }
         if fab.values[idx].is_some() {
             continue;
         }
@@ -46,7 +49,13 @@ pub fn find_naked_single(fab: &CandidateFabric) -> Option<Finding> {
 
 pub fn find_hidden_single(fab: &CandidateFabric) -> Option<Finding> {
     for sector in 0..27 {
+        if !super::search_budget::tick() {
+            return None;
+        }
         for digit in 1..=9u8 {
+            if !super::search_budget::tick() {
+                return None;
+            }
             let count = fab.sector_cand_count(sector, digit);
             if count == 1 {
                 let cells = fab.sector_cells_with_candidate(sector, digit);
@@ -57,6 +66,7 @@ pub fn find_hidden_single(fab: &CandidateFabric) -> Option<Finding> {
                         inference: InferenceResult::Placement { cell, value: digit },
                         involved_cells: vec![cell],
                         explanation: ExplanationData::HiddenSingle {
+                            sector,
                             cell,
                             value: digit,
                             sector_name: sector_name(sector),
@@ -85,6 +95,9 @@ pub fn find_naked_subset(fab: &CandidateFabric, size: usize) -> Option<Finding> 
     };
 
     for sector in 0..27 {
+        if !super::search_budget::tick() {
+            return None;
+        }
         let sec_cells = sector_cells(sector);
         // Collect empty cells in this sector with appropriate candidate counts
         let empty: Vec<usize> = sec_cells
@@ -103,6 +116,9 @@ pub fn find_naked_subset(fab: &CandidateFabric, size: usize) -> Option<Finding> 
 
         // Enumerate combinations of `size` cells
         for combo in combinations_idx(&empty, size) {
+            if !super::search_budget::tick() {
+                return None;
+            }
             let union = combo
                 .iter()
                 .fold(BitSet::empty(), |acc, &c| acc.union(&fab.cell_cands[c]));
@@ -111,6 +127,9 @@ pub fn find_naked_subset(fab: &CandidateFabric, size: usize) -> Option<Finding> 
                 let values: Vec<u8> = union.iter().collect();
                 // Check for eliminations in other cells of this sector
                 for &other in &sec_cells {
+                    if !super::search_budget::tick() {
+                        return None;
+                    }
                     if fab.values[other].is_some() || combo.contains(&other) {
                         continue;
                     }
@@ -135,6 +154,7 @@ pub fn find_naked_subset(fab: &CandidateFabric, size: usize) -> Option<Finding> 
                             },
                             involved_cells: involved,
                             explanation: ExplanationData::LockedSet {
+                                sector,
                                 kind: "Naked",
                                 size,
                                 cells: combo,
@@ -164,6 +184,9 @@ pub fn find_hidden_subset(fab: &CandidateFabric, size: usize) -> Option<Finding>
     };
 
     for sector in 0..27 {
+        if !super::search_budget::tick() {
+            return None;
+        }
         // Find which digits have 2..=size candidate positions in this sector
         let eligible_digits: Vec<u8> = (1..=9u8)
             .filter(|&d| {
@@ -178,9 +201,15 @@ pub fn find_hidden_subset(fab: &CandidateFabric, size: usize) -> Option<Finding>
 
         // Enumerate combinations of `size` digits
         for digit_combo in combinations_u8(&eligible_digits, size) {
+            if !super::search_budget::tick() {
+                return None;
+            }
             // Find union of cells containing these digits
             let mut cell_set = 0u16; // bitmask of cells within sector
             for &d in &digit_combo {
+                if !super::search_budget::tick() {
+                    return None;
+                }
                 cell_set |= fab.sector_digit_cells[sector][(d - 1) as usize];
             }
 
@@ -195,6 +224,9 @@ pub fn find_hidden_subset(fab: &CandidateFabric, size: usize) -> Option<Finding>
                 let digit_set = BitSet::from_slice(&digit_combo);
 
                 for &cell in &subset_cells {
+                    if !super::search_budget::tick() {
+                        return None;
+                    }
                     let to_remove: Vec<u8> = fab.cell_cands[cell]
                         .iter()
                         .filter(|&v| !digit_set.contains(v))
@@ -213,6 +245,7 @@ pub fn find_hidden_subset(fab: &CandidateFabric, size: usize) -> Option<Finding>
                             },
                             involved_cells: subset_cells.clone(),
                             explanation: ExplanationData::LockedSet {
+                                sector,
                                 kind: "Hidden",
                                 size,
                                 cells: subset_cells.clone(),

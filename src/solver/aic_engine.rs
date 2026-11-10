@@ -129,8 +129,14 @@ pub fn find_empty_rectangle(fab: &CandidateFabric) -> Option<Finding> {
     use super::fabric::{SECTOR_BOX_BASE, SECTOR_COL_BASE};
 
     for digit in 1..=9u8 {
+        if !super::search_budget::tick() {
+            return None;
+        }
         let di = (digit - 1) as usize;
         for box_idx in 0..9 {
+            if !super::search_budget::tick() {
+                return None;
+            }
             let box_sector = SECTOR_BOX_BASE + box_idx;
             let digit_cells: Vec<usize> = sector_cells(box_sector)
                 .into_iter()
@@ -140,7 +146,13 @@ pub fn find_empty_rectangle(fab: &CandidateFabric) -> Option<Finding> {
             let box_col = box_idx % 3 * 3;
 
             for er_row in box_row..box_row + 3 {
+                if !super::search_budget::tick() {
+                    return None;
+                }
                 for er_col in box_col..box_col + 3 {
+                    if !super::search_budget::tick() {
+                        return None;
+                    }
                     // The box digit must lie on one of the two arms. Both arms
                     // must contain a candidate outside their intersection.
                     if !digit_cells
@@ -158,11 +170,17 @@ pub fn find_empty_rectangle(fab: &CandidateFabric) -> Option<Finding> {
 
                     // Try the row arm, then its transposed column-arm pattern.
                     for transposed in [false, true] {
+                        if !super::search_budget::tick() {
+                            return None;
+                        }
                         let arm = if transposed { er_col } else { er_row };
                         let cross_arm = if transposed { er_row } else { er_col };
                         let outside_box = if transposed { box_row } else { box_col };
                         let arm_box = if transposed { box_col } else { box_row };
                         for crossing in 0..9 {
+                            if !super::search_budget::tick() {
+                                return None;
+                            }
                             if (outside_box..outside_box + 3).contains(&crossing) {
                                 continue;
                             }
@@ -272,7 +290,13 @@ pub fn find_w_wing(fab: &CandidateFabric) -> Option<Finding> {
         .collect();
 
     for i in 0..bivalues.len() {
+        if !super::search_budget::tick() {
+            return None;
+        }
         for j in (i + 1)..bivalues.len() {
+            if !super::search_budget::tick() {
+                return None;
+            }
             let (c1, a1, b1) = bivalues[i];
             let (c2, a2, b2) = bivalues[j];
 
@@ -285,10 +309,16 @@ pub fn find_w_wing(fab: &CandidateFabric) -> Option<Finding> {
 
             // Check for strong link on x or y in some sector
             for &link_val in &[x, y] {
+                if !super::search_budget::tick() {
+                    return None;
+                }
                 let other_val = if link_val == x { y } else { x };
 
                 // Check all sectors for a conjugate pair on link_val
                 for sector in 0..27 {
+                    if !super::search_budget::tick() {
+                        return None;
+                    }
                     let di = (link_val - 1) as usize;
                     let mask = fab.sector_digit_cells[sector][di];
                     if mask.count_ones() != 2 {
@@ -319,6 +349,9 @@ pub fn find_w_wing(fab: &CandidateFabric) -> Option<Finding> {
 
                     // Eliminate other_val from cells seeing both c1 and c2
                     for idx in 0..81 {
+                        if !super::search_budget::tick() {
+                            return None;
+                        }
                         if fab.values[idx].is_some() || idx == c1 || idx == c2 {
                             continue;
                         }
@@ -421,17 +454,45 @@ fn find_aic_with_filter(
     graph: &LinkGraph,
     single_value_only: bool,
 ) -> Option<Finding> {
+    find_aic_with_budget(
+        fab,
+        graph,
+        single_value_only,
+        &mut super::search_budget::SearchBudget::new(u32::MAX),
+    )
+}
+
+pub(crate) fn find_aic_bounded(fab: &CandidateFabric, limit: u32) -> (Option<Finding>, u32, bool) {
+    let graph = build_link_graph(fab);
+    let mut budget = super::search_budget::SearchBudget::new(limit);
+    let finding = find_aic_with_budget(fab, &graph, false, &mut budget);
+    (finding, budget.used, budget.exhausted)
+}
+
+fn find_aic_with_budget(
+    fab: &CandidateFabric,
+    graph: &LinkGraph,
+    single_value_only: bool,
+    budget: &mut super::search_budget::SearchBudget,
+) -> Option<Finding> {
     const MAX_LENGTH: usize = 12;
 
-    let all_nodes: Vec<Node> = graph.strong.keys().copied().collect();
+    let mut all_nodes: Vec<Node> = graph.strong.keys().copied().collect();
+    all_nodes.sort_unstable();
 
     for &start in &all_nodes {
+        if !super::search_budget::tick() {
+            return None;
+        }
         let mut queue: VecDeque<(Node, bool, Vec<Node>)> = VecDeque::new();
         let mut visited: HashSet<(Node, bool)> = HashSet::new();
 
         // Start by following strong links from start
         if let Some(neighbors) = graph.strong.get(&start) {
             for &next in neighbors {
+                if !super::search_budget::tick() {
+                    return None;
+                }
                 if single_value_only && next.1 != start.1 {
                     continue;
                 }
@@ -440,6 +501,9 @@ fn find_aic_with_filter(
         }
 
         while let Some((current, arrived_strong, chain)) = queue.pop_front() {
+            if !budget.visit() {
+                return None;
+            }
             if chain.len() > MAX_LENGTH {
                 continue;
             }
@@ -460,6 +524,9 @@ fn find_aic_with_filter(
                     if current.1 == start.1 && current.0 != start.0 {
                         let val = start.1;
                         for idx in 0..81 {
+                            if !super::search_budget::tick() {
+                                return None;
+                            }
                             if fab.values[idx].is_some() || idx == start.0 || idx == current.0 {
                                 continue;
                             }
@@ -585,6 +652,9 @@ fn find_aic_with_filter(
                 // Follow weak inferences (derived on-the-fly from fabric)
                 let neighbors = weak_inferences(fab, current);
                 for next in neighbors {
+                    if !super::search_budget::tick() {
+                        return None;
+                    }
                     if chain.contains(&next) && next != start {
                         continue;
                     }
@@ -602,6 +672,9 @@ fn find_aic_with_filter(
                 // Follow strong links
                 if let Some(neighbors) = graph.strong.get(&current) {
                     for &next in neighbors {
+                        if !super::search_budget::tick() {
+                            return None;
+                        }
                         if chain.contains(&next) && next != start {
                             continue;
                         }
@@ -639,10 +712,16 @@ pub fn find_medusa(fab: &CandidateFabric, graph: &LinkGraph) -> Option<Finding> 
     let mut globally_visited: HashSet<Node> = HashSet::new();
 
     for idx in 0..81 {
+        if !super::search_budget::tick() {
+            return None;
+        }
         if fab.values[idx].is_some() {
             continue;
         }
         for start_digit in fab.cell_cands[idx].iter() {
+            if !super::search_budget::tick() {
+                return None;
+            }
             let start = (idx, start_digit);
             if globally_visited.contains(&start) {
                 continue;
@@ -662,6 +741,9 @@ pub fn find_medusa(fab: &CandidateFabric, graph: &LinkGraph) -> Option<Finding> 
                 // Follow strong links only for coloring
                 if let Some(neighbors) = graph.strong.get(&node) {
                     for &next in neighbors {
+                        if !super::search_budget::tick() {
+                            return None;
+                        }
                         if let std::collections::hash_map::Entry::Vacant(e) = color.entry(next) {
                             e.insert(opp);
                             queue.push_back((next, opp));
@@ -676,6 +758,9 @@ pub fn find_medusa(fab: &CandidateFabric, graph: &LinkGraph) -> Option<Finding> 
 
             // Check for contradictions in each color
             for check_color in 0..=1u8 {
+                if !super::search_budget::tick() {
+                    return None;
+                }
                 let colored: Vec<Node> = color
                     .iter()
                     .filter(|(_, &c)| c == check_color)
@@ -685,6 +770,9 @@ pub fn find_medusa(fab: &CandidateFabric, graph: &LinkGraph) -> Option<Finding> 
                 let mut contradiction = false;
                 'outer: for i in 0..colored.len() {
                     for j in (i + 1)..colored.len() {
+                        if !super::search_budget::tick() {
+                            return None;
+                        }
                         let (c1, d1) = colored[i];
                         let (c2, d2) = colored[j];
                         // Rule 1: Same digit, same unit
@@ -703,6 +791,9 @@ pub fn find_medusa(fab: &CandidateFabric, graph: &LinkGraph) -> Option<Finding> 
                 if contradiction {
                     // Eliminate all candidates of this color
                     for &(cell, digit) in &colored {
+                        if !super::search_budget::tick() {
+                            return None;
+                        }
                         if fab.values[cell].is_none() && fab.cell_cands[cell].contains(digit) {
                             let involved: Vec<usize> = colored.iter().map(|&(c, _)| c).collect();
                             let medusa_chain: Vec<(usize, u8, Polarity)> = color
@@ -742,10 +833,16 @@ pub fn find_medusa(fab: &CandidateFabric, graph: &LinkGraph) -> Option<Finding> 
 
             // Rule 5: Uncolored candidate sees both colors of same digit
             for idx2 in 0..81 {
+                if !super::search_budget::tick() {
+                    return None;
+                }
                 if fab.values[idx2].is_some() {
                     continue;
                 }
                 for digit in fab.cell_cands[idx2].iter() {
+                    if !super::search_budget::tick() {
+                        return None;
+                    }
                     if color.contains_key(&(idx2, digit)) {
                         continue;
                     }
@@ -809,11 +906,17 @@ pub fn find_nishio_fc(
     cells.sort_by_key(|&p| grid.get_candidates(p).count());
 
     for &pos in &cells {
+        if !super::search_budget::tick() {
+            return None;
+        }
         let cands = grid.get_candidates(pos);
         if cands.count() < 2 || cands.count() > 4 {
             continue;
         }
         for val in cands.iter() {
+            if !super::search_budget::tick() {
+                return None;
+            }
             let (_, contradiction) = propagate(grid, pos, val);
             if contradiction {
                 let cell = pos.row * 9 + pos.col;
@@ -845,8 +948,17 @@ pub fn find_kraken_fish(
     propagate: &dyn Fn(&Grid, Position, u8) -> (Grid, bool),
 ) -> Option<Finding> {
     for digit in 1..=9u8 {
+        if !super::search_budget::tick() {
+            return None;
+        }
         for r1 in 0..9 {
+            if !super::search_budget::tick() {
+                return None;
+            }
             for r2 in (r1 + 1)..9 {
+                if !super::search_budget::tick() {
+                    return None;
+                }
                 let row1_cols: Vec<usize> = (0..9)
                     .filter(|&c| {
                         let p = Position::new(r1, c);
@@ -897,8 +1009,14 @@ pub fn find_kraken_fish(
                     .collect();
 
                 for &target in &targets {
+                    if !super::search_budget::tick() {
+                        return None;
+                    }
                     let mut all_fins_eliminate = true;
                     for &fin in &fins {
+                        if !super::search_budget::tick() {
+                            return None;
+                        }
                         let (result, contradiction) = propagate(grid, fin, digit);
                         if contradiction {
                             continue;
@@ -923,6 +1041,9 @@ pub fn find_kraken_fish(
                             r2 * 9 + common_cols[1],
                         ];
                         for fin in &fins {
+                            if !super::search_budget::tick() {
+                                return None;
+                            }
                             involved.push(fin.row * 9 + fin.col);
                         }
                         involved.push(target_cell);
@@ -959,6 +1080,9 @@ pub fn find_cell_fc(
     cells.sort_by_key(|&p| grid.get_candidates(p).count());
 
     for &pos in &cells {
+        if !super::search_budget::tick() {
+            return None;
+        }
         let cands = grid.get_candidates(pos);
         if cands.count() < 2 || cands.count() > 4 {
             continue;
@@ -968,6 +1092,9 @@ pub fn find_cell_fc(
         let mut any_contradiction = false;
 
         for val in cands.iter() {
+            if !super::search_budget::tick() {
+                return None;
+            }
             let (result, contradiction) = propagate(grid, pos, val);
             if contradiction {
                 any_contradiction = true;
@@ -1017,6 +1144,9 @@ pub fn find_region_fc(
     propagate: &dyn Fn(&Grid, Position, u8) -> (Grid, bool),
 ) -> Option<Finding> {
     for unit in 0..27 {
+        if !super::search_budget::tick() {
+            return None;
+        }
         let positions: Vec<Position> = if unit < 9 {
             (0..9).map(|c| Position::new(unit, c)).collect()
         } else if unit < 18 {
@@ -1031,6 +1161,9 @@ pub fn find_region_fc(
         };
 
         for digit in 1..=9u8 {
+            if !super::search_budget::tick() {
+                return None;
+            }
             let digit_cells: Vec<Position> = positions
                 .iter()
                 .filter(|&&p| grid.cell(p).is_empty() && grid.get_candidates(p).contains(digit))
@@ -1045,6 +1178,9 @@ pub fn find_region_fc(
             let mut any_contradiction = false;
 
             for &pos in &digit_cells {
+                if !super::search_budget::tick() {
+                    return None;
+                }
                 let (result, contradiction) = propagate(grid, pos, digit);
                 if contradiction {
                     any_contradiction = true;
@@ -1104,6 +1240,9 @@ pub fn find_dynamic_fc(
     cells.sort_by_key(|&p| grid.get_candidates(p).count());
 
     for &pos in &cells {
+        if !super::search_budget::tick() {
+            return None;
+        }
         let cands = grid.get_candidates(pos);
         if cands.count() < 2 || cands.count() > 3 {
             continue;
@@ -1112,6 +1251,9 @@ pub fn find_dynamic_fc(
         let mut branches = Vec::new();
 
         for val in cands.iter() {
+            if !super::search_budget::tick() {
+                return None;
+            }
             let (result, contradiction) = propagate_full(grid, pos, val);
             if contradiction {
                 let cell = pos.row * 9 + pos.col;
@@ -1181,12 +1323,18 @@ fn find_common_placement(
     proof: ProofCertificate,
 ) -> Option<Finding> {
     for target in grid.empty_positions() {
+        if !super::search_budget::tick() {
+            return None;
+        }
         if target == source || grid.get(target).is_some() {
             continue;
         }
         let mut common_val: Option<u8> = None;
         let mut all_agree = true;
         for branch in branches {
+            if !super::search_budget::tick() {
+                return None;
+            }
             if let Some(v) = branch.get(target) {
                 match common_val {
                     None => common_val = Some(v),
@@ -1238,6 +1386,9 @@ fn find_common_elimination(
     proof: ProofCertificate,
 ) -> Option<Finding> {
     for target in grid.empty_positions() {
+        if !super::search_budget::tick() {
+            return None;
+        }
         if target == source {
             continue;
         }
@@ -1246,8 +1397,14 @@ fn find_common_elimination(
             continue;
         }
         for val in orig_cands.iter() {
+            if !super::search_budget::tick() {
+                return None;
+            }
             let mut all_eliminate = true;
             for branch in branches {
+                if !super::search_budget::tick() {
+                    return None;
+                }
                 if let Some(placed) = branch.get(target) {
                     if placed == val {
                         all_eliminate = false;

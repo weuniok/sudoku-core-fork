@@ -34,6 +34,13 @@ fn als_to_descriptor(als: &Als) -> AlsProofDescriptor {
 
 /// Enumerate all ALS in the grid (sizes 1..=5 cells).
 fn enumerate_als(fab: &CandidateFabric) -> Vec<Als> {
+    enumerate_als_bounded(fab, &mut super::search_budget::SearchBudget::new(u32::MAX))
+}
+
+fn enumerate_als_bounded(
+    fab: &CandidateFabric,
+    budget: &mut super::search_budget::SearchBudget,
+) -> Vec<Als> {
     let mut result = Vec::new();
 
     for sector in 0..27 {
@@ -68,6 +75,9 @@ fn enumerate_als(fab: &CandidateFabric) -> Vec<Als> {
             }
             let mut set = (1u32 << n) - 1;
             while set < mask_limit {
+                if !budget.visit() {
+                    return result;
+                }
                 // Extract the cells from this subset
                 let mut cells = Vec::with_capacity(n);
                 let mut union = BitSet::empty();
@@ -167,10 +177,46 @@ pub fn find_als_xz(fab: &CandidateFabric) -> Option<Finding> {
 
 /// Internal: find ALS-XZ with optional technique filter.
 fn find_als_xz_filtered(fab: &CandidateFabric, filter: Option<Technique>) -> Option<Finding> {
-    let all_als = enumerate_als(fab);
+    find_als_xz_budget(
+        fab,
+        filter,
+        &mut super::search_budget::SearchBudget::new(u32::MAX),
+        false,
+    )
+}
+
+pub(crate) fn find_wing_bounded(
+    fab: &CandidateFabric,
+    technique: Technique,
+    limit: u32,
+) -> (Option<Finding>, u32, bool) {
+    let mut budget = super::search_budget::SearchBudget::new(limit);
+    let finding = find_als_xz_budget(fab, Some(technique), &mut budget, true);
+    (finding, budget.used, budget.exhausted)
+}
+
+fn find_als_xz_budget(
+    fab: &CandidateFabric,
+    filter: Option<Technique>,
+    budget: &mut super::search_budget::SearchBudget,
+    teaching_names: bool,
+) -> Option<Finding> {
+    let all_als = enumerate_als_bounded(fab, budget);
+    if budget.exhausted {
+        return None;
+    }
 
     for i in 0..all_als.len() {
+        if !super::search_budget::tick() {
+            return None;
+        }
         for j in (i + 1)..all_als.len() {
+            if !super::search_budget::tick() {
+                return None;
+            }
+            if !budget.visit() {
+                return None;
+            }
             let als_a = &all_als[i];
             let als_b = &all_als[j];
 
@@ -186,7 +232,13 @@ fn find_als_xz_filtered(fab: &CandidateFabric, filter: Option<Technique>) -> Opt
             let common = als_a.candidates.intersection(&als_b.candidates);
 
             for &x in &rccs {
+                if !super::search_budget::tick() {
+                    return None;
+                }
                 for z in common.iter() {
+                    if !super::search_budget::tick() {
+                        return None;
+                    }
                     if z == x {
                         continue;
                     }
@@ -210,6 +262,9 @@ fn find_als_xz_filtered(fab: &CandidateFabric, filter: Option<Technique>) -> Opt
 
                     // Eliminate z from cells seeing all z-cells in both ALS
                     for cell in 0..81 {
+                        if !super::search_budget::tick() {
+                            return None;
+                        }
                         if fab.values[cell].is_some() || !fab.cell_cands[cell].contains(z) {
                             continue;
                         }
@@ -219,7 +274,22 @@ fn find_als_xz_filtered(fab: &CandidateFabric, filter: Option<Technique>) -> Opt
                         if a_cells_z.iter().all(|&a| fab.sees(cell, a))
                             && b_cells_z.iter().all(|&b| fab.sees(cell, b))
                         {
-                            let technique = classify_als_pair(als_a, als_b);
+                            // The legacy rating classifier calls a 1+1 ALS pair
+                            // XY-Wing. For teaching, require the conventional
+                            // three bivalue cells with an XY pivot and XZ/YZ wings.
+                            let technique = if teaching_names && filter == Some(Technique::XYWing) {
+                                if !is_teaching_xy_wing(fab, als_a, als_b, z) {
+                                    continue;
+                                }
+                                Technique::XYWing
+                            } else if teaching_names && filter == Some(Technique::XYZWing) {
+                                if !is_teaching_xyz_wing(fab, als_a, als_b, z) {
+                                    continue;
+                                }
+                                Technique::XYZWing
+                            } else {
+                                classify_als_pair(als_a, als_b)
+                            };
                             if let Some(f) = filter {
                                 if technique != f {
                                     continue;
@@ -257,6 +327,62 @@ fn find_als_xz_filtered(fab: &CandidateFabric, filter: Option<Technique>) -> Opt
     None
 }
 
+fn is_teaching_xyz_wing(fab: &CandidateFabric, a: &Als, b: &Als, z: u8) -> bool {
+    let cells: Vec<usize> = a.cells.iter().chain(&b.cells).copied().collect();
+    if cells.len() != 3 {
+        return false;
+    }
+    let pivots: Vec<_> = cells
+        .iter()
+        .copied()
+        .filter(|&c| fab.cell_cands[c].count() == 3)
+        .collect();
+    if pivots.len() != 1 {
+        return false;
+    }
+    let pivot = pivots[0];
+    let wings: Vec<_> = cells.into_iter().filter(|&c| c != pivot).collect();
+    let left = fab.cell_cands[wings[0]];
+    let right = fab.cell_cands[wings[1]];
+    left.count() == 2
+        && right.count() == 2
+        && left != right
+        && left.contains(z)
+        && right.contains(z)
+        && fab.cell_cands[pivot].contains(z)
+        && left.union(&right) == fab.cell_cands[pivot]
+        && fab.sees(pivot, wings[0])
+        && fab.sees(pivot, wings[1])
+}
+
+fn is_teaching_xy_wing(fab: &CandidateFabric, a: &Als, b: &Als, z: u8) -> bool {
+    let cells: Vec<usize> = a.cells.iter().chain(&b.cells).copied().collect();
+    if cells.len() != 3 || cells.iter().any(|&cell| fab.cell_cands[cell].count() != 2) {
+        return false;
+    }
+    let pivots: Vec<usize> = cells
+        .iter()
+        .copied()
+        .filter(|&cell| !fab.cell_cands[cell].contains(z))
+        .collect();
+    let wings: Vec<usize> = cells
+        .iter()
+        .copied()
+        .filter(|&cell| fab.cell_cands[cell].contains(z))
+        .collect();
+    if pivots.len() != 1 || wings.len() != 2 {
+        return false;
+    }
+    let pivot = pivots[0];
+    let left = fab.cell_cands[pivot].intersection(&fab.cell_cands[wings[0]]);
+    let right = fab.cell_cands[pivot].intersection(&fab.cell_cands[wings[1]]);
+    fab.sees(pivot, wings[0])
+        && fab.sees(pivot, wings[1])
+        && left.count() == 1
+        && right.count() == 1
+        && left != right
+}
+
 /// Classify an ALS pair by cell sizes into SE rating sub-classifications of ALS-XZ.
 ///
 /// XY-Wing (1+1), XYZ-Wing (1+2), WXYZ-Wing (total 4), and general ALS-XZ
@@ -290,6 +416,12 @@ fn technique_name(t: Technique) -> &'static str {
 // ==================== ALS-XY-Wing (3-ALS chain) ====================
 
 pub fn find_als_xy_wing(fab: &CandidateFabric) -> Option<Finding> {
+    find_als_xy_wing_with_order(fab, false)
+}
+pub(crate) fn find_als_xy_wing_teaching(fab: &CandidateFabric) -> Option<Finding> {
+    find_als_xy_wing_with_order(fab, true)
+}
+fn find_als_xy_wing_with_order(fab: &CandidateFabric, stable: bool) -> Option<Finding> {
     let all_als = enumerate_als(fab);
     let small_als: Vec<&Als> = all_als
         .iter()
@@ -301,7 +433,13 @@ pub fn find_als_xy_wing(fab: &CandidateFabric) -> Option<Finding> {
     let mut rcc_map: std::collections::HashMap<(usize, usize), Vec<u8>> =
         std::collections::HashMap::new();
     for i in 0..small_als.len() {
+        if !super::search_budget::tick() {
+            return None;
+        }
         for j in (i + 1)..small_als.len() {
+            if !super::search_budget::tick() {
+                return None;
+            }
             let rccs = find_rccs(fab, small_als[i], small_als[j]);
             if !rccs.is_empty() {
                 rcc_map.insert((i, j), rccs.clone());
@@ -310,13 +448,26 @@ pub fn find_als_xy_wing(fab: &CandidateFabric) -> Option<Finding> {
         }
     }
 
+    let mut entries: Vec<_> = rcc_map.iter().collect();
+    if stable {
+        entries.sort_by_key(|(key, _)| **key);
+    }
     // Try chains A-B-C (length 3)
     for a_idx in 0..small_als.len() {
-        for (&(from, b_idx), rccs_ab) in &rcc_map {
+        if !super::search_budget::tick() {
+            return None;
+        }
+        for (&(from, b_idx), rccs_ab) in entries.iter().copied() {
+            if !super::search_budget::tick() {
+                return None;
+            }
             if from != a_idx {
                 continue;
             }
-            for (&(from2, c_idx), rccs_bc) in &rcc_map {
+            for (&(from2, c_idx), rccs_bc) in entries.iter().copied() {
+                if !super::search_budget::tick() {
+                    return None;
+                }
                 if from2 != b_idx || c_idx == a_idx {
                     continue;
                 }
@@ -331,12 +482,21 @@ pub fn find_als_xy_wing(fab: &CandidateFabric) -> Option<Finding> {
                 let common_ac = als_a.candidates.intersection(&als_c.candidates);
 
                 for &x in rccs_ab {
+                    if !super::search_budget::tick() {
+                        return None;
+                    }
                     for &y in rccs_bc {
+                        if !super::search_budget::tick() {
+                            return None;
+                        }
                         if y == x {
                             continue;
                         }
 
                         for z in common_ac.iter() {
+                            if !super::search_budget::tick() {
+                                return None;
+                            }
                             if z == x || z == y {
                                 continue;
                             }
@@ -359,6 +519,9 @@ pub fn find_als_xy_wing(fab: &CandidateFabric) -> Option<Finding> {
                             }
 
                             for cell in 0..81 {
+                                if !super::search_budget::tick() {
+                                    return None;
+                                }
                                 if fab.values[cell].is_some() || !fab.cell_cands[cell].contains(z) {
                                     continue;
                                 }
@@ -407,6 +570,12 @@ pub fn find_als_xy_wing(fab: &CandidateFabric) -> Option<Finding> {
 // ==================== ALS Chain (4+ ALS) ====================
 
 pub fn find_als_chain(fab: &CandidateFabric) -> Option<Finding> {
+    find_als_chain_with_order(fab, false)
+}
+pub(crate) fn find_als_chain_teaching(fab: &CandidateFabric) -> Option<Finding> {
+    find_als_chain_with_order(fab, true)
+}
+fn find_als_chain_with_order(fab: &CandidateFabric, stable: bool) -> Option<Finding> {
     let all_als = enumerate_als(fab);
     let small_als: Vec<&Als> = all_als
         .iter()
@@ -417,7 +586,13 @@ pub fn find_als_chain(fab: &CandidateFabric) -> Option<Finding> {
     let mut rcc_map: std::collections::HashMap<(usize, usize), Vec<u8>> =
         std::collections::HashMap::new();
     for i in 0..small_als.len() {
+        if !super::search_budget::tick() {
+            return None;
+        }
         for j in (i + 1)..small_als.len() {
+            if !super::search_budget::tick() {
+                return None;
+            }
             let rccs = find_rccs(fab, small_als[i], small_als[j]);
             if !rccs.is_empty() {
                 rcc_map.insert((i, j), rccs.clone());
@@ -428,31 +603,52 @@ pub fn find_als_chain(fab: &CandidateFabric) -> Option<Finding> {
 
     // Try chains A-B-C-D (length 4)
     for a_idx in 0..small_als.len() {
-        let a_partners: Vec<(usize, &[u8])> = rcc_map
+        if !super::search_budget::tick() {
+            return None;
+        }
+        let mut a_partners: Vec<(usize, &[u8])> = rcc_map
             .iter()
             .filter(|((from, _), _)| *from == a_idx)
             .map(|((_, to), rccs)| (*to, rccs.as_slice()))
             .collect();
+        if stable {
+            a_partners.sort_by_key(|(cell, _)| *cell);
+        }
 
         for &(b_idx, rccs_ab) in &a_partners {
-            let b_partners: Vec<(usize, &[u8])> = rcc_map
+            if !super::search_budget::tick() {
+                return None;
+            }
+            let mut b_partners: Vec<(usize, &[u8])> = rcc_map
                 .iter()
                 .filter(|((from, _), _)| *from == b_idx)
                 .map(|((_, to), rccs)| (*to, rccs.as_slice()))
                 .collect();
+            if stable {
+                b_partners.sort_by_key(|(cell, _)| *cell);
+            }
 
             for &(c_idx, rccs_bc) in &b_partners {
+                if !super::search_budget::tick() {
+                    return None;
+                }
                 if c_idx == a_idx {
                     continue;
                 }
 
-                let c_partners: Vec<(usize, &[u8])> = rcc_map
+                let mut c_partners: Vec<(usize, &[u8])> = rcc_map
                     .iter()
                     .filter(|((from, _), _)| *from == c_idx)
                     .map(|((_, to), rccs)| (*to, rccs.as_slice()))
                     .collect();
+                if stable {
+                    c_partners.sort_by_key(|(cell, _)| *cell);
+                }
 
                 for &(d_idx, rccs_cd) in &c_partners {
+                    if !super::search_budget::tick() {
+                        return None;
+                    }
                     if d_idx == a_idx || d_idx == b_idx {
                         continue;
                     }
@@ -467,15 +663,27 @@ pub fn find_als_chain(fab: &CandidateFabric) -> Option<Finding> {
                     let common_ad = als_a.candidates.intersection(&als_d.candidates);
 
                     for &x in rccs_ab {
+                        if !super::search_budget::tick() {
+                            return None;
+                        }
                         for &y in rccs_bc {
+                            if !super::search_budget::tick() {
+                                return None;
+                            }
                             if y == x {
                                 continue;
                             }
                             for &w in rccs_cd {
+                                if !super::search_budget::tick() {
+                                    return None;
+                                }
                                 if w == y {
                                     continue;
                                 }
                                 for z in common_ad.iter() {
+                                    if !super::search_budget::tick() {
+                                        return None;
+                                    }
                                     if z == x || z == w {
                                         continue;
                                     }
@@ -498,6 +706,9 @@ pub fn find_als_chain(fab: &CandidateFabric) -> Option<Finding> {
                                     }
 
                                     for cell in 0..81 {
+                                        if !super::search_budget::tick() {
+                                            return None;
+                                        }
                                         if fab.values[cell].is_some()
                                             || !fab.cell_cands[cell].contains(z)
                                         {
@@ -558,10 +769,19 @@ pub fn find_als_chain(fab: &CandidateFabric) -> Option<Finding> {
 pub fn find_sue_de_coq(fab: &CandidateFabric) -> Option<Finding> {
     // For each box-line intersection (3 cells where a box meets a row/col)
     for box_idx in 0..9 {
+        if !super::search_budget::tick() {
+            return None;
+        }
         let box_cells = sector_cells(SECTOR_BOX_BASE + box_idx);
 
         for line_type in 0..2 {
+            if !super::search_budget::tick() {
+                return None;
+            }
             for line_idx in 0..9 {
+                if !super::search_budget::tick() {
+                    return None;
+                }
                 let line_sector = if line_type == 0 {
                     SECTOR_ROW_BASE + line_idx
                 } else {
@@ -616,7 +836,13 @@ pub fn find_sue_de_coq(fab: &CandidateFabric) -> Option<Finding> {
                 let line_als = find_local_als(fab, &rest_line, line_sector);
 
                 for ba in &box_als {
+                    if !super::search_budget::tick() {
+                        return None;
+                    }
                     for la in &line_als {
+                        if !super::search_budget::tick() {
+                            return None;
+                        }
                         let combined = ba.candidates.union(&la.candidates);
                         if combined == inter_cands
                             && ba.candidates.intersection(&la.candidates).is_empty()
@@ -648,6 +874,9 @@ pub fn find_sue_de_coq(fab: &CandidateFabric) -> Option<Finding> {
                                 })
                             };
                             for &cell in &rest_box {
+                                if !super::search_budget::tick() {
+                                    return None;
+                                }
                                 if ba.cells.contains(&cell) {
                                     continue;
                                 }
@@ -677,6 +906,9 @@ pub fn find_sue_de_coq(fab: &CandidateFabric) -> Option<Finding> {
                                 }
                             }
                             for &cell in &rest_line {
+                                if !super::search_budget::tick() {
+                                    return None;
+                                }
                                 if la.cells.contains(&cell) {
                                     continue;
                                 }
@@ -742,6 +974,9 @@ pub fn find_death_blossom(fab: &CandidateFabric) -> Option<Finding> {
     let all_als = enumerate_als(fab);
 
     for stem in 0..81 {
+        if !super::search_budget::tick() {
+            return None;
+        }
         if fab.values[stem].is_some() {
             continue;
         }
@@ -761,8 +996,14 @@ pub fn find_death_blossom(fab: &CandidateFabric) -> Option<Finding> {
         let mut all_have_petals = true;
 
         for &d in &cand_vec {
+            if !super::search_budget::tick() {
+                return None;
+            }
             let mut options = Vec::new();
             for (idx, als) in all_als.iter().enumerate() {
+                if !super::search_budget::tick() {
+                    return None;
+                }
                 if als.cells.contains(&stem) {
                     continue;
                 }
@@ -810,6 +1051,9 @@ fn try_death_blossom(
     // Simple: try first valid petal for each candidate
     let mut petals: Vec<usize> = Vec::new();
     for opts in petal_options {
+        if !super::search_budget::tick() {
+            return None;
+        }
         if let Some(&first) = opts.first() {
             petals.push(first);
         } else {
@@ -819,7 +1063,13 @@ fn try_death_blossom(
 
     // Check no overlap between petals
     for i in 0..petals.len() {
+        if !super::search_budget::tick() {
+            return None;
+        }
         for j in (i + 1)..petals.len() {
+            if !super::search_budget::tick() {
+                return None;
+            }
             if all_als[petals[i]]
                 .cells
                 .iter()
@@ -834,15 +1084,24 @@ fn try_death_blossom(
     // and can be eliminated from cells seeing all z-cells in all petals
     let mut common_cands = BitSet::all_9();
     for &pi in &petals {
+        if !super::search_budget::tick() {
+            return None;
+        }
         common_cands = common_cands.intersection(&all_als[pi].candidates);
     }
 
     // Remove the linking candidates
     for &d in cand_vec {
+        if !super::search_budget::tick() {
+            return None;
+        }
         common_cands.remove(d);
     }
 
     for z in common_cands.iter() {
+        if !super::search_budget::tick() {
+            return None;
+        }
         let z_cell_groups: Vec<Vec<usize>> = petals
             .iter()
             .map(|&pi| {
@@ -860,6 +1119,9 @@ fn try_death_blossom(
         }
 
         for cell in 0..81 {
+            if !super::search_budget::tick() {
+                return None;
+            }
             if cell == stem || fab.values[cell].is_some() || !fab.cell_cands[cell].contains(z) {
                 continue;
             }
@@ -874,6 +1136,9 @@ fn try_death_blossom(
             if sees_all {
                 let mut involved = vec![stem];
                 for &pi in &petals {
+                    if !super::search_budget::tick() {
+                        return None;
+                    }
                     involved.extend(&all_als[pi].cells);
                 }
                 // Stem as a size-1 ALS descriptor, plus each petal ALS
@@ -884,6 +1149,9 @@ fn try_death_blossom(
                 };
                 let mut als_chain = vec![stem_desc];
                 for &pi in &petals {
+                    if !super::search_budget::tick() {
+                        return None;
+                    }
                     als_chain.push(als_to_descriptor(&all_als[pi]));
                 }
                 return Some(Finding {
@@ -928,6 +1196,9 @@ pub fn find_aligned_pair_exclusion(fab: &CandidateFabric) -> Option<Finding> {
     let empty: Vec<usize> = (0..81).filter(|&c| fab.values[c].is_none()).collect();
 
     for i in 0..empty.len() {
+        if !super::search_budget::tick() {
+            return None;
+        }
         let p1 = empty[i];
         let c1 = fab.cell_cands[p1];
         if c1.count() < 2 || c1.count() > 5 {
@@ -935,6 +1206,9 @@ pub fn find_aligned_pair_exclusion(fab: &CandidateFabric) -> Option<Finding> {
         }
 
         for j in (i + 1)..empty.len() {
+            if !super::search_budget::tick() {
+                return None;
+            }
             let p2 = empty[j];
             if !fab.sees(p1, p2) {
                 continue;
@@ -947,7 +1221,13 @@ pub fn find_aligned_pair_exclusion(fab: &CandidateFabric) -> Option<Finding> {
             // Enumerate valid value pairs (mutual visibility forbids equal values)
             let mut valid_pairs: Vec<(u8, u8)> = Vec::new();
             for v1 in c1.iter() {
+                if !super::search_budget::tick() {
+                    return None;
+                }
                 for v2 in c2.iter() {
+                    if !super::search_budget::tick() {
+                        return None;
+                    }
                     if v1 != v2 {
                         valid_pairs.push((v1, v2));
                     }
@@ -960,6 +1240,9 @@ pub fn find_aligned_pair_exclusion(fab: &CandidateFabric) -> Option<Finding> {
 
             // Check common peers for locked values
             for &pos in &empty {
+                if !super::search_budget::tick() {
+                    return None;
+                }
                 if pos == p1 || pos == p2 {
                     continue;
                 }
@@ -968,6 +1251,9 @@ pub fn find_aligned_pair_exclusion(fab: &CandidateFabric) -> Option<Finding> {
                 }
 
                 for val in fab.cell_cands[pos].iter() {
+                    if !super::search_budget::tick() {
+                        return None;
+                    }
                     // If every valid assignment uses val in at least one cell,
                     // val is locked to the pair — eliminate from this peer.
                     let all_exclude = valid_pairs.iter().all(|&(v1, v2)| v1 == val || v2 == val);
@@ -1029,6 +1315,9 @@ pub fn find_aligned_triplet_exclusion(fab: &CandidateFabric) -> Option<Finding> 
     let empty: Vec<usize> = (0..81).filter(|&c| fab.values[c].is_none()).collect();
 
     for i in 0..empty.len() {
+        if !super::search_budget::tick() {
+            return None;
+        }
         let p1 = empty[i];
         let c1 = fab.cell_cands[p1];
         if c1.count() < 2 || c1.count() > 4 {
@@ -1036,6 +1325,9 @@ pub fn find_aligned_triplet_exclusion(fab: &CandidateFabric) -> Option<Finding> 
         }
 
         for j in (i + 1)..empty.len() {
+            if !super::search_budget::tick() {
+                return None;
+            }
             let p2 = empty[j];
             if !fab.sees(p1, p2) {
                 continue;
@@ -1046,6 +1338,9 @@ pub fn find_aligned_triplet_exclusion(fab: &CandidateFabric) -> Option<Finding> 
             }
 
             for k in (j + 1)..empty.len() {
+                if !super::search_budget::tick() {
+                    return None;
+                }
                 let p3 = empty[k];
                 if !fab.sees(p1, p3) || !fab.sees(p2, p3) {
                     continue;
@@ -1058,11 +1353,20 @@ pub fn find_aligned_triplet_exclusion(fab: &CandidateFabric) -> Option<Finding> 
                 // Enumerate valid value triples (all pairs mutually visible)
                 let mut valid_triples: Vec<(u8, u8, u8)> = Vec::new();
                 for v1 in c1.iter() {
+                    if !super::search_budget::tick() {
+                        return None;
+                    }
                     for v2 in c2.iter() {
+                        if !super::search_budget::tick() {
+                            return None;
+                        }
                         if v1 == v2 {
                             continue;
                         }
                         for v3 in c3.iter() {
+                            if !super::search_budget::tick() {
+                                return None;
+                            }
                             if v1 != v3 && v2 != v3 {
                                 valid_triples.push((v1, v2, v3));
                             }
@@ -1076,6 +1380,9 @@ pub fn find_aligned_triplet_exclusion(fab: &CandidateFabric) -> Option<Finding> 
 
                 // Check common peers for locked values
                 for &pos in &empty {
+                    if !super::search_budget::tick() {
+                        return None;
+                    }
                     if pos == p1 || pos == p2 || pos == p3 {
                         continue;
                     }
@@ -1084,6 +1391,9 @@ pub fn find_aligned_triplet_exclusion(fab: &CandidateFabric) -> Option<Finding> 
                     }
 
                     for val in fab.cell_cands[pos].iter() {
+                        if !super::search_budget::tick() {
+                            return None;
+                        }
                         let all_exclude = valid_triples
                             .iter()
                             .all(|&(v1, v2, v3)| v1 == val || v2 == val || v3 == val);

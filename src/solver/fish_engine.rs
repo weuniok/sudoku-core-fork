@@ -78,10 +78,16 @@ fn find_independent_combination(
         cells: u128,
         visit: &mut impl FnMut(&[usize], u128) -> Option<Finding>,
     ) -> Option<Finding> {
+        if !super::search_budget::tick() {
+            return None;
+        }
         if remaining == 0 {
             return visit(prefix, cells);
         }
         for index in start..=pool.len() - remaining {
+            if !super::search_budget::tick() {
+                return None;
+            }
             let sector = pool[index];
             let candidates = masks[sector];
             // One placement in an overlap could satisfy two groups, invalidating
@@ -138,6 +144,55 @@ fn search_fish_for_digit(
     size: usize,
     constraint: SectorConstraint,
 ) -> Option<Finding> {
+    search_fish_for_digit_filtered(fab, digit, size, constraint, None)
+}
+
+pub(crate) fn find_teaching_fish(fab: &CandidateFabric, id: &str) -> Option<Finding> {
+    let (technique, size, constraint) = match id {
+        "x_wing" => (Technique::XWing, 2, SectorConstraint::Basic),
+        "finned_x_wing" => (Technique::FinnedXWing, 2, SectorConstraint::Basic),
+        "swordfish" => (Technique::Swordfish, 3, SectorConstraint::Basic),
+        "finned_swordfish" => (Technique::FinnedSwordfish, 3, SectorConstraint::Basic),
+        "jellyfish" => (Technique::Jellyfish, 4, SectorConstraint::Basic),
+        "finned_jellyfish" => (Technique::FinnedJellyfish, 4, SectorConstraint::Basic),
+        "franken_fish" => (Technique::FrankenFish, 0, SectorConstraint::Franken),
+        "mutant_fish" => (Technique::MutantFish, 0, SectorConstraint::Mutant),
+        _ => return None,
+    };
+    let mut digits: Vec<u8> = (1..=9).collect();
+    // Search the most constrained digit first. The digit itself breaks ties,
+    // independent of map seeds; sparse fish need not wait behind dense digits.
+    digits.sort_by_key(|&d| {
+        (
+            (0..81).filter(|&c| fab.cell_cands[c].contains(d)).count(),
+            d,
+        )
+    });
+    for digit in digits {
+        for n in 2..=4 {
+            if !super::search_budget::tick() {
+                return None;
+            }
+            if size != 0 && n != size {
+                continue;
+            }
+            if let Some(f) =
+                search_fish_for_digit_filtered(fab, digit, n, constraint, Some(technique))
+            {
+                return Some(f);
+            }
+        }
+    }
+    None
+}
+
+fn search_fish_for_digit_filtered(
+    fab: &CandidateFabric,
+    digit: u8,
+    size: usize,
+    constraint: SectorConstraint,
+    wanted: Option<Technique>,
+) -> Option<Finding> {
     let masks = std::array::from_fn(|sector| sector_candidate_mask(fab, sector, digit));
     // Determine which sectors can be bases and covers
     let (base_sectors, cover_sectors) = match constraint {
@@ -146,16 +201,20 @@ fn search_fish_for_digit(
             let rows: Vec<usize> = (SECTOR_ROW_BASE..SECTOR_ROW_BASE + 9).collect();
             let cols: Vec<usize> = (SECTOR_COL_BASE..SECTOR_COL_BASE + 9).collect();
             // Try both orientations
-            return search_fish_oriented(fab, &masks, digit, size, &rows, &cols, constraint)
-                .or_else(|| {
-                    search_fish_oriented(fab, &masks, digit, size, &cols, &rows, constraint)
-                });
+            return search_fish_oriented(
+                fab, &masks, digit, size, &rows, &cols, constraint, wanted,
+            )
+            .or_else(|| {
+                search_fish_oriented(fab, &masks, digit, size, &cols, &rows, constraint, wanted)
+            });
         }
         SectorConstraint::Franken => {
             // Lines as bases, lines+boxes as covers
             let lines: Vec<usize> = (0..18).collect();
             let all: Vec<usize> = (0..27).collect();
-            return search_fish_oriented(fab, &masks, digit, size, &lines, &all, constraint);
+            return search_fish_oriented(
+                fab, &masks, digit, size, &lines, &all, constraint, wanted,
+            );
         }
         SectorConstraint::Mutant => {
             let all: Vec<usize> = (0..27).collect();
@@ -171,6 +230,7 @@ fn search_fish_for_digit(
         &base_sectors,
         &cover_sectors,
         constraint,
+        wanted,
     )
 }
 
@@ -182,6 +242,7 @@ fn search_fish_oriented(
     base_pool: &[usize],
     cover_pool: &[usize],
     constraint: SectorConstraint,
+    wanted: Option<Technique>,
 ) -> Option<Finding> {
     let eligible_bases: Vec<usize> = base_pool
         .iter()
@@ -204,6 +265,9 @@ fn search_fish_oriented(
                 return None;
             }
             let fins = base_cells & !cover_cells;
+            if wanted.is_some_and(|t| t != classify_fish(size, fins != 0, constraint)) {
+                return None;
+            }
             let eliminations = cover_cells & !base_cells;
             if fins == 0 {
                 make_fish_finding(
@@ -299,6 +363,9 @@ fn make_fish_finding(
 
     // Find the first elimination cell
     for cell in 0..81 {
+        if !super::search_budget::tick() {
+            return None;
+        }
         if elim_mask & (1u128 << cell) != 0
             && fab.values[cell].is_none()
             && fab.cell_cands[cell].contains(digit)
@@ -331,7 +398,13 @@ fn make_fish_finding(
             // Collect involved cells (all candidates for this digit in base sectors)
             let mut involved = Vec::new();
             for &bs in bases {
+                if !super::search_budget::tick() {
+                    return None;
+                }
                 for &c in &sector_cells(bs) {
+                    if !super::search_budget::tick() {
+                        return None;
+                    }
                     if fab.values[c].is_none()
                         && fab.cell_cands[c].contains(digit)
                         && !involved.contains(&c)
@@ -399,8 +472,14 @@ pub fn find_siamese_fish(fab: &CandidateFabric) -> Option<Finding> {
     // produce fin cells in the same box. We search for finned fish with an
     // additional constraint that there's a second valid fish pattern sharing the fin.
     for digit in 1..=9u8 {
+        if !super::search_budget::tick() {
+            return None;
+        }
         let masks = std::array::from_fn(|sector| sector_candidate_mask(fab, sector, digit));
         for size in 2..=4usize {
+            if !super::search_budget::tick() {
+                return None;
+            }
             // Get all row-based fish patterns with fins
             let rows: Vec<usize> = (SECTOR_ROW_BASE..SECTOR_ROW_BASE + 9)
                 .filter(|&s| fab.sector_cand_count(s, digit) >= 2)
@@ -415,7 +494,13 @@ pub fn find_siamese_fish(fab: &CandidateFabric) -> Option<Finding> {
             let all_combos = masked_combinations(&rows, size, &masks);
             let col_combos = masked_combinations(&cols, size, &masks);
             for i in 0..all_combos.len() {
+                if !super::search_budget::tick() {
+                    return None;
+                }
                 for j in (i + 1)..all_combos.len() {
+                    if !super::search_budget::tick() {
+                        return None;
+                    }
                     let combo_a = &all_combos[i];
                     let combo_b = &all_combos[j];
 
@@ -441,7 +526,13 @@ pub fn find_siamese_fish(fab: &CandidateFabric) -> Option<Finding> {
             let all_col_combos = masked_combinations(&eligible_cols, size, &masks);
             let row_combos = masked_combinations(&row_covers, size, &masks);
             for i in 0..all_col_combos.len() {
+                if !super::search_budget::tick() {
+                    return None;
+                }
                 for j in (i + 1)..all_col_combos.len() {
+                    if !super::search_budget::tick() {
+                        return None;
+                    }
                     if let Some(finding) = check_siamese_pair(
                         fab,
                         &masks,
@@ -477,6 +568,9 @@ fn check_siamese_pair(
     let combo_a = &base_a.sectors;
     let combo_b = &base_b.sectors;
     for cover in cover_combos {
+        if !super::search_budget::tick() {
+            return None;
+        }
         let fins_a = base_a.cells & !cover.cells;
         let fins_b = base_b.cells & !cover.cells;
         if fins_a == 0 || fins_b == 0 {
@@ -495,13 +589,22 @@ fn check_siamese_pair(
         let fin_cells_b: Vec<usize> = (0..81).filter(|&i| fins_b & (1u128 << i) != 0).collect();
 
         for cell in 0..81 {
+            if !super::search_budget::tick() {
+                return None;
+            }
             if combined & (1u128 << cell) != 0
                 && fab.values[cell].is_none()
                 && fab.cell_cands[cell].contains(digit)
             {
                 let mut involved = Vec::new();
                 for &bs in combo_a.iter().chain(combo_b.iter()) {
+                    if !super::search_budget::tick() {
+                        return None;
+                    }
                     for &c in &sector_cells(bs) {
+                        if !super::search_budget::tick() {
+                            return None;
+                        }
                         if fab.values[c].is_none()
                             && fab.cell_cands[c].contains(digit)
                             && !involved.contains(&c)
@@ -569,7 +672,13 @@ fn sector_name_long(sector: usize) -> String {
 /// row or column, that digit can be eliminated from the rest of that row/col.
 pub fn find_pointing_pair(fab: &CandidateFabric) -> Option<Finding> {
     for digit in 1..=9u8 {
+        if !super::search_budget::tick() {
+            return None;
+        }
         for box_idx in 0..9 {
+            if !super::search_budget::tick() {
+                return None;
+            }
             let base = SECTOR_BOX_BASE + box_idx;
             let base_mask = sector_candidate_mask(fab, base, digit);
             let base_count = base_mask.count_ones();
@@ -579,6 +688,9 @@ pub fn find_pointing_pair(fab: &CandidateFabric) -> Option<Finding> {
 
             // Try each row and column as the cover
             for cover in 0..18 {
+                if !super::search_budget::tick() {
+                    return None;
+                }
                 let cover_mask = sector_candidate_mask(fab, cover, digit);
                 // All base cells must lie within the cover sector
                 if base_mask & cover_mask != base_mask {
@@ -590,6 +702,9 @@ pub fn find_pointing_pair(fab: &CandidateFabric) -> Option<Finding> {
                     continue;
                 }
                 for cell in 0..81usize {
+                    if !super::search_budget::tick() {
+                        return None;
+                    }
                     if elim_mask & (1u128 << cell) != 0 {
                         let involved: Vec<usize> =
                             (0..81).filter(|&c| base_mask & (1u128 << c) != 0).collect();
@@ -627,7 +742,13 @@ pub fn find_pointing_pair(fab: &CandidateFabric) -> Option<Finding> {
 /// a single box, that digit can be eliminated from the rest of that box.
 pub fn find_box_line_reduction(fab: &CandidateFabric) -> Option<Finding> {
     for digit in 1..=9u8 {
+        if !super::search_budget::tick() {
+            return None;
+        }
         for line in 0..18usize {
+            if !super::search_budget::tick() {
+                return None;
+            }
             let base_mask = sector_candidate_mask(fab, line, digit);
             let base_count = base_mask.count_ones();
             if !(2..=3).contains(&base_count) {
@@ -635,6 +756,9 @@ pub fn find_box_line_reduction(fab: &CandidateFabric) -> Option<Finding> {
             }
 
             for box_idx in 0..9 {
+                if !super::search_budget::tick() {
+                    return None;
+                }
                 let cover = SECTOR_BOX_BASE + box_idx;
                 let cover_mask = sector_candidate_mask(fab, cover, digit);
                 // All base cells must lie within the cover sector
@@ -647,6 +771,9 @@ pub fn find_box_line_reduction(fab: &CandidateFabric) -> Option<Finding> {
                     continue;
                 }
                 for cell in 0..81usize {
+                    if !super::search_budget::tick() {
+                        return None;
+                    }
                     if elim_mask & (1u128 << cell) != 0 {
                         let involved: Vec<usize> =
                             (0..81).filter(|&c| base_mask & (1u128 << c) != 0).collect();
@@ -683,6 +810,9 @@ pub fn find_box_line_reduction(fab: &CandidateFabric) -> Option<Finding> {
 /// Search for basic fish (X-Wing, Swordfish, Jellyfish) and finned variants.
 pub fn find_basic_fish(fab: &CandidateFabric, size: usize) -> Option<Finding> {
     for digit in 1..=9u8 {
+        if !super::search_budget::tick() {
+            return None;
+        }
         if let Some(f) = search_fish_for_digit(fab, digit, size, SectorConstraint::Basic) {
             return Some(f);
         }
@@ -695,6 +825,9 @@ pub fn find_finned_fish(fab: &CandidateFabric, size: usize) -> Option<Finding> {
     // The search_fish_for_digit already handles finned variants
     // We need to filter for finned-only results
     for digit in 1..=9u8 {
+        if !super::search_budget::tick() {
+            return None;
+        }
         if let Some(f) = search_fish_for_digit(fab, digit, size, SectorConstraint::Basic) {
             // Check if it's actually finned (the technique classification tells us)
             match f.technique {
@@ -713,7 +846,13 @@ pub fn find_finned_fish(fab: &CandidateFabric, size: usize) -> Option<Finding> {
 /// Search for Franken fish (mixed line+box sectors).
 pub fn find_franken_fish(fab: &CandidateFabric) -> Option<Finding> {
     for digit in 1..=9u8 {
+        if !super::search_budget::tick() {
+            return None;
+        }
         for size in 2..=4 {
+            if !super::search_budget::tick() {
+                return None;
+            }
             if let Some(f) = search_fish_for_digit(fab, digit, size, SectorConstraint::Franken) {
                 return Some(f);
             }
@@ -725,7 +864,13 @@ pub fn find_franken_fish(fab: &CandidateFabric) -> Option<Finding> {
 /// Search for Mutant fish (all three sector types).
 pub fn find_mutant_fish(fab: &CandidateFabric) -> Option<Finding> {
     for digit in 1..=9u8 {
+        if !super::search_budget::tick() {
+            return None;
+        }
         for size in 2..=4 {
+            if !super::search_budget::tick() {
+                return None;
+            }
             if let Some(f) = search_fish_for_digit(fab, digit, size, SectorConstraint::Mutant) {
                 return Some(f);
             }

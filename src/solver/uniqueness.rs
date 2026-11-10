@@ -31,9 +31,21 @@ fn pos_to_idx(row: usize, col: usize) -> usize {
 /// Avoidable Rectangle: Like UR but involves given (clue) cells.
 pub fn find_avoidable_rectangle(fab: &CandidateFabric) -> Option<Finding> {
     for r1 in 0..9 {
+        if !super::search_budget::tick() {
+            return None;
+        }
         for r2 in (r1 + 1)..9 {
+            if !super::search_budget::tick() {
+                return None;
+            }
             for c1 in 0..9 {
+                if !super::search_budget::tick() {
+                    return None;
+                }
                 for c2 in (c1 + 1)..9 {
+                    if !super::search_budget::tick() {
+                        return None;
+                    }
                     let corners = [
                         pos_to_idx(r1, c1),
                         pos_to_idx(r1, c2),
@@ -61,6 +73,9 @@ pub fn find_avoidable_rectangle(fab: &CandidateFabric) -> Option<Finding> {
                     let mut digits = std::collections::HashSet::new();
 
                     for &corner in &corners {
+                        if !super::search_budget::tick() {
+                            return None;
+                        }
                         if fab.values[corner].is_some() {
                             solved_count += 1;
                             if let Some(v) = fab.values[corner] {
@@ -146,9 +161,15 @@ pub fn find_unique_rectangle(fab: &CandidateFabric) -> Option<Finding> {
         .collect();
 
     for i in 0..bivalues.len() {
+        if !super::search_budget::tick() {
+            return None;
+        }
         let (c1, a, b) = bivalues[i];
 
         for &(c2, c, d) in &bivalues[(i + 1)..] {
+            if !super::search_budget::tick() {
+                return None;
+            }
             if !((a == c && b == d) || (a == d && b == c)) {
                 continue;
             }
@@ -162,6 +183,9 @@ pub fn find_unique_rectangle(fab: &CandidateFabric) -> Option<Finding> {
 
             if r1 == r2 {
                 for other_row in 0..9 {
+                    if !super::search_budget::tick() {
+                        return None;
+                    }
                     if other_row == r1 {
                         continue;
                     }
@@ -182,6 +206,9 @@ pub fn find_unique_rectangle(fab: &CandidateFabric) -> Option<Finding> {
                 }
             } else {
                 for other_col in 0..9 {
+                    if !super::search_budget::tick() {
+                        return None;
+                    }
                     if other_col == col1 {
                         continue;
                     }
@@ -274,6 +301,9 @@ fn try_ur_hint(
         if extra3.len() == 1 && extra4.len() == 1 && extra3[0] == extra4[0] {
             let extra = extra3[0];
             for idx in 0..81 {
+                if !super::search_budget::tick() {
+                    return None;
+                }
                 if fab.values[idx].is_some() || idx == corner3 || idx == corner4 {
                     continue;
                 }
@@ -329,6 +359,9 @@ fn try_ur_hint(
             }
 
             for &unit_sector in &units {
+                if !super::search_budget::tick() {
+                    return None;
+                }
                 let sec_cells = sector_cells(unit_sector);
                 let other_cells: Vec<usize> = sec_cells
                     .iter()
@@ -345,9 +378,15 @@ fn try_ur_hint(
                 if subset_size >= 2 && other_cells.len() >= subset_size - 1 {
                     // Enumerate combos of (subset_size - 1) other cells
                     for combo in combinations(&other_cells, subset_size - 1) {
+                        if !super::search_budget::tick() {
+                            return None;
+                        }
                         let mut subset_cands = combined_extras;
                         let mut valid = true;
                         for &sc in &combo {
+                            if !super::search_budget::tick() {
+                                return None;
+                            }
                             let sc_cands = fab.cell_cands[sc];
                             if !sc_cands.difference(&combined_extras).is_empty()
                                 && sc_cands.intersection(&combined_extras).is_empty()
@@ -368,6 +407,9 @@ fn try_ur_hint(
                         }
 
                         for &cell in &other_cells {
+                            if !super::search_budget::tick() {
+                                return None;
+                            }
                             if combo.contains(&cell) {
                                 continue;
                             }
@@ -401,6 +443,9 @@ fn try_ur_hint(
 
     // Type 4: Strong link on one UR digit forces the other out
     for &digit in &[a, b] {
+        if !super::search_budget::tick() {
+            return None;
+        }
         let other = if digit == a { b } else { a };
         let (r3, c3_col) = (corner3 / 9, corner3 % 9);
         let (r4, c4_col) = (corner4 / 9, corner4 % 9);
@@ -472,6 +517,9 @@ fn try_ur_hint(
             if extra3.len() == 1 && extra4.len() == 1 && extra3[0] == extra4[0] {
                 let extra = extra3[0];
                 for idx in 0..81 {
+                    if !super::search_budget::tick() {
+                        return None;
+                    }
                     if fab.values[idx].is_some()
                         || idx == corner3
                         || idx == corner4
@@ -515,6 +563,9 @@ fn try_ur_hint(
 
         if cand3.count() > 2 && cand4.count() > 2 && r3 != r4 && c3_col != c4_col {
             for &digit in &[a, b] {
+                if !super::search_budget::tick() {
+                    return None;
+                }
                 let other = if digit == a { b } else { a };
                 let di = (digit - 1) as usize;
 
@@ -572,9 +623,21 @@ fn try_ur_hint(
 
 pub fn find_hidden_rectangle(fab: &CandidateFabric) -> Option<Finding> {
     for r1 in 0..9 {
+        if !super::search_budget::tick() {
+            return None;
+        }
         for r2 in (r1 + 1)..9 {
+            if !super::search_budget::tick() {
+                return None;
+            }
             for c1 in 0..9 {
+                if !super::search_budget::tick() {
+                    return None;
+                }
                 for c2 in (c1 + 1)..9 {
+                    if !super::search_budget::tick() {
+                        return None;
+                    }
                     let corners = [
                         pos_to_idx(r1, c1),
                         pos_to_idx(r1, c2),
@@ -595,6 +658,9 @@ pub fn find_hidden_rectangle(fab: &CandidateFabric) -> Option<Finding> {
                     // Find common candidates
                     let mut common = fab.cell_cands[corners[0]];
                     for &c in &corners[1..] {
+                        if !super::search_budget::tick() {
+                            return None;
+                        }
                         common = common.intersection(&fab.cell_cands[c]);
                     }
                     if common.count() < 2 {
@@ -603,12 +669,21 @@ pub fn find_hidden_rectangle(fab: &CandidateFabric) -> Option<Finding> {
 
                     let common_vec: Vec<u8> = common.iter().collect();
                     for di in 0..common_vec.len() {
+                        if !super::search_budget::tick() {
+                            return None;
+                        }
                         for dj in (di + 1)..common_vec.len() {
+                            if !super::search_budget::tick() {
+                                return None;
+                            }
                             let a = common_vec[di];
                             let b = common_vec[dj];
 
                             let pair = BitSet::from_slice(&[a, b]);
                             for (index, &corner) in corners.iter().enumerate() {
+                                if !super::search_budget::tick() {
+                                    return None;
+                                }
                                 let diagonal = corners[3 - index];
                                 // If the eliminated digit occupied this corner,
                                 // the two conjugate links would force the other
@@ -621,6 +696,9 @@ pub fn find_hidden_rectangle(fab: &CandidateFabric) -> Option<Finding> {
                                     continue;
                                 }
                                 for &digit in &[a, b] {
+                                    if !super::search_budget::tick() {
+                                        return None;
+                                    }
                                     let other = if digit == a { b } else { a };
                                     let di = (digit - 1) as usize;
                                     let row = corner / 9;
@@ -677,6 +755,9 @@ pub fn find_extended_unique_rectangle(fab: &CandidateFabric) -> Option<Finding> 
 
         let mut common = fab.cell_cands[corners[0]];
         for &c in &corners[1..] {
+            if !super::search_budget::tick() {
+                return None;
+            }
             common = common.intersection(&fab.cell_cands[c]);
         }
         if common.count() < 2 {
@@ -685,7 +766,13 @@ pub fn find_extended_unique_rectangle(fab: &CandidateFabric) -> Option<Finding> 
 
         let common_vec: Vec<u8> = common.iter().collect();
         for di in 0..common_vec.len() {
+            if !super::search_budget::tick() {
+                return None;
+            }
             for dj in (di + 1)..common_vec.len() {
+                if !super::search_budget::tick() {
+                    return None;
+                }
                 let a = common_vec[di];
                 let b = common_vec[dj];
                 let ur_pair = BitSet::from_slice(&[a, b]);
@@ -700,6 +787,9 @@ pub fn find_extended_unique_rectangle(fab: &CandidateFabric) -> Option<Finding> 
                 }
 
                 for &corner in corners {
+                    if !super::search_budget::tick() {
+                        return None;
+                    }
                     if fab.cell_cands[corner].count() > 2 {
                         let mut elim = Vec::new();
                         if fab.cell_cands[corner].contains(a) {
@@ -747,10 +837,25 @@ pub fn find_extended_unique_rectangle(fab: &CandidateFabric) -> Option<Finding> 
 
     // 2 rows x 3 cols
     for r1 in 0..9 {
+        if !super::search_budget::tick() {
+            return None;
+        }
         for r2 in (r1 + 1)..9 {
+            if !super::search_budget::tick() {
+                return None;
+            }
             for c1 in 0..9 {
+                if !super::search_budget::tick() {
+                    return None;
+                }
                 for c2 in (c1 + 1)..9 {
+                    if !super::search_budget::tick() {
+                        return None;
+                    }
                     for c3 in (c2 + 1)..9 {
+                        if !super::search_budget::tick() {
+                            return None;
+                        }
                         let corners = [
                             pos_to_idx(r1, c1),
                             pos_to_idx(r1, c2),
@@ -770,10 +875,25 @@ pub fn find_extended_unique_rectangle(fab: &CandidateFabric) -> Option<Finding> 
 
     // 3 rows x 2 cols
     for r1 in 0..9 {
+        if !super::search_budget::tick() {
+            return None;
+        }
         for r2 in (r1 + 1)..9 {
+            if !super::search_budget::tick() {
+                return None;
+            }
             for r3 in (r2 + 1)..9 {
+                if !super::search_budget::tick() {
+                    return None;
+                }
                 for c1 in 0..9 {
+                    if !super::search_budget::tick() {
+                        return None;
+                    }
                     for c2 in (c1 + 1)..9 {
+                        if !super::search_budget::tick() {
+                            return None;
+                        }
                         let corners = [
                             pos_to_idx(r1, c1),
                             pos_to_idx(r1, c2),
@@ -835,6 +955,9 @@ pub fn find_bug(fab: &CandidateFabric) -> Option<Finding> {
 
     let mut non_bivalue: Vec<usize> = Vec::new();
     for &idx in &empty {
+        if !super::search_budget::tick() {
+            return None;
+        }
         let count = fab.cell_cands[idx].count();
         if count < 2 {
             return None;
@@ -864,6 +987,9 @@ pub fn find_bug(fab: &CandidateFabric) -> Option<Finding> {
         let box_idx = idx_to_pos(tri).box_index();
 
         for val in cands.iter() {
+            if !super::search_budget::tick() {
+                return None;
+            }
             let row_count = fab.sector_digit_cells[row][(val - 1) as usize].count_ones();
             let col_count = fab.sector_digit_cells[9 + col][(val - 1) as usize].count_ones();
             let box_count = fab.sector_digit_cells[18 + box_idx][(val - 1) as usize].count_ones();
@@ -896,12 +1022,18 @@ pub fn find_bug(fab: &CandidateFabric) -> Option<Finding> {
     // BUG+n: identify extra candidates, look for eliminations
     let mut cell_extras: Vec<(usize, Vec<u8>)> = Vec::new();
     for &idx in &non_bivalue {
+        if !super::search_budget::tick() {
+            return None;
+        }
         let cands = fab.cell_cands[idx];
         let (row, col) = (idx / 9, idx % 9);
         let box_idx = idx_to_pos(idx).box_index();
         let mut extras = Vec::new();
 
         for val in cands.iter() {
+            if !super::search_budget::tick() {
+                return None;
+            }
             let row_count = fab.sector_digit_cells[row][(val - 1) as usize].count_ones();
             let col_count = fab.sector_digit_cells[9 + col][(val - 1) as usize].count_ones();
             let box_count = fab.sector_digit_cells[18 + box_idx][(val - 1) as usize].count_ones();
@@ -918,6 +1050,9 @@ pub fn find_bug(fab: &CandidateFabric) -> Option<Finding> {
     }
 
     for digit in 1..=9u8 {
+        if !super::search_budget::tick() {
+            return None;
+        }
         // At least one extra must be true. Removing this digit from a common
         // peer is justified only when it conflicts with every possible extra,
         // including extras in other cells or of other digits.
@@ -944,6 +1079,9 @@ pub fn find_bug(fab: &CandidateFabric) -> Option<Finding> {
         {
             let row = cells_with_digit[0] / 9;
             for col in 0..9 {
+                if !super::search_budget::tick() {
+                    return None;
+                }
                 let idx = pos_to_idx(row, col);
                 if !cells_with_digit.contains(&idx)
                     && fab.values[idx].is_none()
@@ -981,6 +1119,9 @@ pub fn find_bug(fab: &CandidateFabric) -> Option<Finding> {
         {
             let col = cells_with_digit[0] % 9;
             for row in 0..9 {
+                if !super::search_budget::tick() {
+                    return None;
+                }
                 let idx = pos_to_idx(row, col);
                 if !cells_with_digit.contains(&idx)
                     && fab.values[idx].is_none()
@@ -1019,6 +1160,9 @@ pub fn find_bug(fab: &CandidateFabric) -> Option<Finding> {
             let box_idx = idx_to_pos(cells_with_digit[0]).box_index();
             let box_sector = 18 + box_idx;
             for &cell in &sector_cells(box_sector) {
+                if !super::search_budget::tick() {
+                    return None;
+                }
                 if !cells_with_digit.contains(&cell)
                     && fab.values[cell].is_none()
                     && fab.cell_cands[cell].contains(digit)
