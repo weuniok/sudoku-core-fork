@@ -5,10 +5,9 @@ use super::explain::{
 };
 use super::fabric::{sector_cells, CandidateFabric};
 use super::teaching_contract::{
-    TeachingCandidate, TeachingConjugate, TeachingEvidence, TeachingGroup, TeachingHint,
-    TeachingHouse, TeachingLink, TeachingNode, TeachingProof, TeachingRelation, TeachingUniqueness,
+    TeachingCandidate, TeachingConjugate, TeachingDeduction, TeachingEvidence, TeachingGroup,
+    TeachingHouse, TeachingLink, TeachingNode, TeachingRelation, TeachingUniqueness,
 };
-use sha2::{Digest, Sha256};
 
 fn candidate(cell: usize, digit: u8) -> TeachingCandidate {
     TeachingCandidate {
@@ -36,8 +35,7 @@ pub(super) fn adapt(
     finding: &Finding,
     fab: &CandidateFabric,
     technique: &str,
-    position_key: String,
-) -> Result<TeachingHint, String> {
+) -> Result<TeachingDeduction, String> {
     let (placements, eliminations) = match &finding.inference {
         InferenceResult::Placement { cell, value } => (vec![candidate(*cell, *value)], vec![]),
         InferenceResult::Elimination { cell, values } => (
@@ -48,7 +46,6 @@ pub(super) fn adapt(
     let mut sources = finding.involved_cells.clone();
     let mut houses = vec![];
     let mut candidates = vec![];
-    let mut variant = finding.technique.to_string();
     let mut evidence = TeachingEvidence {
         kind: "basic".into(),
         nodes: vec![],
@@ -211,9 +208,6 @@ pub(super) fn adapt(
                     .into(),
                 })
                 .collect();
-            if let ExplanationData::Chain { variant: name, .. } = &finding.explanation {
-                variant = name.clone();
-            }
         }
         Some(ProofCertificate::Uniqueness {
             pattern,
@@ -312,45 +306,13 @@ pub(super) fn adapt(
     sources.dedup();
     candidates.sort_by_key(|c| (c.cell, c.digit));
     candidates.dedup();
-    let proof = TeachingProof {
-        evidence,
-        branches: vec![],
-    };
-    // Preserve v1 identities for the original eight techniques: protocol growth
-    // must not count an already-requested deduction again after upgrading.
-    let original = [
-        "naked_single",
-        "hidden_single",
-        "locked_candidates",
-        "naked_pair",
-        "x_wing",
-        "xy_wing",
-        "wxyz_wing",
-        "aic",
-    ]
-    .contains(&technique);
-    let proof_key = if original {
-        format!("TeachingProof {{ kind: {:?}, nodes: {:?}, links: {:?}, groups: {:?}, rcc_digits: {:?} }}", proof.kind, proof.nodes, proof.links, proof.groups, proof.rcc_digits)
-    } else {
-        format!("{proof:?}")
-    };
-    let pattern = format!("{sources:?}:{candidates:?}:{placements:?}:{eliminations:?}:{proof_key}");
-    let key = format!(
-        "{position_key}:{technique}:{:x}",
-        Sha256::digest(pattern.as_bytes())
-    );
-    Ok(TeachingHint {
-        schema_version: 2,
+    Ok(TeachingDeduction {
         technique_id: technique.into(),
-        variant,
-        position_key,
-        key,
-        source_cells: sources.iter().map(|&c| c as u8).collect(),
+        source_cells: sources.iter().map(|&cell| cell as u8).collect(),
         candidates,
         placements,
         eliminations,
         houses,
-        proof,
-        explanation: finding.to_hint().explanation,
+        proof: evidence,
     })
 }

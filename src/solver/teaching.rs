@@ -1,8 +1,12 @@
 //! Versioned, read-only mobile teaching API. Technique priority belongs to the
 //! caller; this dispatcher never invokes the globally preferred hint or guesses.
-use super::explain::{Finding, InferenceResult, LinkType, Polarity, ProofCertificate};
+use super::explain::{
+    ExplanationData, Finding, InferenceResult, LinkType, Polarity, ProofCertificate,
+};
 use super::fabric::{sector_cells, CandidateFabric};
-use super::teaching_contract::TeachingSearchResult;
+use super::teaching_contract::{
+    TeachingBranch, TeachingDeduction, TeachingHint, TeachingProof, TeachingSearchResult,
+};
 use super::teaching_proof::adapt;
 use super::{aic_engine, als_engine, basic, fish_engine, uniqueness, Technique};
 use crate::{Grid, Position};
@@ -200,13 +204,86 @@ pub fn search_teaching_hint_with_options(
             .collect::<Vec<_>>()
             .join(",")
     );
-    let mut hint = adapt(&finding, &fab, technique, position_key)?;
+    let deduction = adapt(&finding, &fab, technique)?;
+    let hint = build_hint(&finding, deduction, position_key, branches);
+    Ok(TeachingSearchResult {
+        status: "found".into(),
+        work_used: work,
+        hints: vec![hint],
+    })
+}
+
+fn build_hint(
+    finding: &Finding,
+    deduction: TeachingDeduction,
+    position_key: String,
+    branches: Vec<TeachingBranch>,
+) -> TeachingHint {
+    let TeachingDeduction {
+        technique_id,
+        source_cells,
+        candidates,
+        placements,
+        eliminations,
+        houses,
+        proof: evidence,
+    } = deduction;
+    let variant = match (&finding.proof, &finding.explanation) {
+        (Some(ProofCertificate::Aic { .. }), ExplanationData::Chain { variant, .. }) => {
+            variant.clone()
+        }
+        _ => finding.technique.to_string(),
+    };
+    let proof = TeachingProof {
+        evidence,
+        branches: vec![],
+    };
+    let technique = technique_id.as_str();
+    // Preserve v1 identities for the original eight techniques: protocol growth
+    // must not count an already-requested deduction again after upgrading.
+    let original = [
+        "naked_single",
+        "hidden_single",
+        "locked_candidates",
+        "naked_pair",
+        "x_wing",
+        "xy_wing",
+        "wxyz_wing",
+        "aic",
+    ]
+    .contains(&technique);
+    let proof_key = if original {
+        format!("TeachingProof {{ kind: {:?}, nodes: {:?}, links: {:?}, groups: {:?}, rcc_digits: {:?} }}", proof.kind, proof.nodes, proof.links, proof.groups, proof.rcc_digits)
+    } else {
+        format!("{proof:?}")
+    };
+    let pattern =
+        format!("{source_cells:?}:{candidates:?}:{placements:?}:{eliminations:?}:{proof_key}");
+    let key = format!(
+        "{position_key}:{technique}:{:x}",
+        Sha256::digest(pattern.as_bytes())
+    );
+    let mut hint = TeachingHint {
+        schema_version: 2,
+        technique_id,
+        variant,
+        position_key,
+        key,
+        source_cells,
+        candidates,
+        placements,
+        eliminations,
+        houses,
+        proof,
+        explanation: finding.to_hint().explanation,
+    };
+
     hint.proof.branches = branches;
     if !hint.proof.branches.is_empty() {
         hint.key = format!(
             "{}:{}:{:x}",
             hint.position_key,
-            technique,
+            hint.technique_id,
             Sha256::digest(format!("{}:{:?}", hint.key, hint.proof.branches).as_bytes())
         );
         for branch in &hint.proof.branches {
@@ -215,11 +292,7 @@ pub fn search_teaching_hint_with_options(
         hint.candidates.sort_by_key(|c| (c.cell, c.digit));
         hint.candidates.dedup();
     }
-    Ok(TeachingSearchResult {
-        status: "found".into(),
-        work_used: work,
-        hints: vec![hint],
-    })
+    hint
 }
 
 pub(super) fn find_direct(fab: &CandidateFabric, technique: &str) -> Option<Finding> {
