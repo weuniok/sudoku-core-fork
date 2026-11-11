@@ -1,8 +1,10 @@
 //! Teaching adapter for the existing forcing finders. Only explicitly allowed
 //! named techniques propagate; structural candidate constraints always apply.
-use super::teaching::{
-    self, TeachingBranch, TeachingCandidate, TeachingContradiction, TeachingDeduction,
+use super::teaching;
+use super::teaching_contract::{
+    TeachingBranch, TeachingCandidate, TeachingContradiction, TeachingDeduction,
 };
+use super::teaching_proof::adapt;
 use super::{
     aic_engine,
     explain::{Finding, InferenceResult, ProofCertificate},
@@ -115,7 +117,7 @@ fn propagate(
             exhaust();
             return (result, branch);
         }
-        let hint = match teaching::adapt(&finding, &fab, id, String::new()) {
+        let hint = match adapt(&finding, &fab, id, String::new()) {
             Ok(h) => h,
             Err(_) => {
                 exhaust();
