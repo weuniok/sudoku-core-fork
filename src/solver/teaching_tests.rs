@@ -1,5 +1,8 @@
 use super::teaching::*;
-use super::teaching_contract::{TeachingCandidate, TeachingHint, TeachingSearchResult};
+use super::teaching_contract::{
+    TeachingBranch, TeachingCandidate, TeachingDeduction, TeachingHint, TeachingSearchResult,
+};
+use super::teaching_identity::hint_key;
 use crate::{Grid, Position};
 use serde_json::{json, Value};
 use std::collections::BTreeSet;
@@ -83,6 +86,47 @@ fn all_forty_teaching_methods_have_deterministic_positive_wire_fixtures() {
         covered,
         TEACHING_TECHNIQUES.iter().map(|s| s.to_string()).collect()
     );
+}
+
+#[test]
+fn hint_identity_uses_frozen_deduction_fields_and_forcing_steps() {
+    let fixtures = cases();
+    let mut direct_hint = fixtures
+        .iter()
+        .find(|(case, _)| case["techniqueId"] == "finned_x_wing")
+        .unwrap()
+        .0["result"]["hints"][0]
+        .clone();
+    let position = direct_hint["positionKey"].as_str().unwrap().to_owned();
+    let expected = direct_hint["key"].as_str().unwrap().to_owned();
+    direct_hint["schemaVersion"] = json!(99);
+    direct_hint["variant"] = json!("Different display name");
+    direct_hint["explanation"] = json!("Different explanation");
+    let mut deduction: TeachingDeduction = serde_json::from_value(direct_hint).unwrap();
+    assert_eq!(hint_key(&position, &deduction, &[]), expected);
+    deduction.eliminations[0].digit = deduction.eliminations[0].digit % 9 + 1;
+    assert_ne!(hint_key(&position, &deduction, &[]), expected);
+
+    let mut branches: Vec<TeachingBranch> = fixtures
+        .iter()
+        .filter_map(|(case, _)| case["result"]["hints"][0]["proof"]["branches"].as_array())
+        .find(|branches| {
+            branches.iter().any(|branch| {
+                branch["steps"]
+                    .as_array()
+                    .is_some_and(|steps| !steps.is_empty())
+            })
+        })
+        .map(|branches| serde_json::from_value(json!(branches)).unwrap())
+        .unwrap();
+    deduction.technique_id = "dynamic_forcing_chain".into();
+    let key = hint_key(&position, &deduction, &branches);
+    let step = branches
+        .iter_mut()
+        .find_map(|branch| branch.steps.first_mut())
+        .unwrap();
+    step.source_cells.push(80);
+    assert_ne!(hint_key(&position, &deduction, &branches), key);
 }
 
 #[test]

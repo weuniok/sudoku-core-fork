@@ -16,6 +16,7 @@ mod search_budget;
 mod teaching;
 mod teaching_contract;
 mod teaching_forcing;
+mod teaching_identity;
 mod teaching_proof;
 #[cfg(test)]
 mod teaching_tests;

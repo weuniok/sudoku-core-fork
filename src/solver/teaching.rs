@@ -7,10 +7,10 @@ use super::fabric::{sector_cells, CandidateFabric};
 use super::teaching_contract::{
     TeachingBranch, TeachingDeduction, TeachingHint, TeachingProof, TeachingSearchResult,
 };
+use super::teaching_identity::hint_key;
 use super::teaching_proof::adapt;
 use super::{aic_engine, als_engine, basic, fish_engine, uniqueness, Technique};
 use crate::{Grid, Position};
-use sha2::{Digest, Sha256};
 
 pub const TEACHING_TECHNIQUES: &[&str] = &[
     "naked_single",
@@ -219,10 +219,11 @@ fn build_hint(
     position_key: String,
     branches: Vec<TeachingBranch>,
 ) -> TeachingHint {
+    let key = hint_key(&position_key, &deduction, &branches);
     let TeachingDeduction {
         technique_id,
         source_cells,
-        candidates,
+        mut candidates,
         placements,
         eliminations,
         houses,
@@ -234,36 +235,12 @@ fn build_hint(
         }
         _ => finding.technique.to_string(),
     };
-    let proof = TeachingProof {
-        evidence,
-        branches: vec![],
-    };
-    let technique = technique_id.as_str();
-    // Preserve v1 identities for the original eight techniques: protocol growth
-    // must not count an already-requested deduction again after upgrading.
-    let original = [
-        "naked_single",
-        "hidden_single",
-        "locked_candidates",
-        "naked_pair",
-        "x_wing",
-        "xy_wing",
-        "wxyz_wing",
-        "aic",
-    ]
-    .contains(&technique);
-    let proof_key = if original {
-        format!("TeachingProof {{ kind: {:?}, nodes: {:?}, links: {:?}, groups: {:?}, rcc_digits: {:?} }}", proof.kind, proof.nodes, proof.links, proof.groups, proof.rcc_digits)
-    } else {
-        format!("{proof:?}")
-    };
-    let pattern =
-        format!("{source_cells:?}:{candidates:?}:{placements:?}:{eliminations:?}:{proof_key}");
-    let key = format!(
-        "{position_key}:{technique}:{:x}",
-        Sha256::digest(pattern.as_bytes())
-    );
-    let mut hint = TeachingHint {
+    if !branches.is_empty() {
+        candidates.extend(branches.iter().map(|branch| branch.assumption.clone()));
+        candidates.sort_by_key(|candidate| (candidate.cell, candidate.digit));
+        candidates.dedup();
+    }
+    TeachingHint {
         schema_version: 2,
         technique_id,
         variant,
@@ -274,25 +251,9 @@ fn build_hint(
         placements,
         eliminations,
         houses,
-        proof,
+        proof: TeachingProof { evidence, branches },
         explanation: finding.to_hint().explanation,
-    };
-
-    hint.proof.branches = branches;
-    if !hint.proof.branches.is_empty() {
-        hint.key = format!(
-            "{}:{}:{:x}",
-            hint.position_key,
-            hint.technique_id,
-            Sha256::digest(format!("{}:{:?}", hint.key, hint.proof.branches).as_bytes())
-        );
-        for branch in &hint.proof.branches {
-            hint.candidates.push(branch.assumption.clone());
-        }
-        hint.candidates.sort_by_key(|c| (c.cell, c.digit));
-        hint.candidates.dedup();
     }
-    hint
 }
 
 pub(super) fn find_direct(fab: &CandidateFabric, technique: &str) -> Option<Finding> {
