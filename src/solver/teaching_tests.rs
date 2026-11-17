@@ -1,4 +1,5 @@
 use super::teaching::*;
+use super::teaching_contract::{TeachingCandidate, TeachingHint, TeachingSearchResult};
 use crate::{Grid, Position};
 use serde_json::{json, Value};
 use std::collections::BTreeSet;
@@ -192,4 +193,142 @@ fn xy_and_xyz_names_and_w_wing_implications_follow_the_actual_pattern() {
     search_teaching_hint(&blank, &blank, &masks, "aic", 1).unwrap();
     assert_eq!(crate::Solver::new().count_solutions(&original, 2), before);
     assert_eq!(original.get(Position::new(0, 0)), None);
+}
+
+fn ring() -> Vec<u16> {
+    let mut masks = vec![0; 81];
+    for (cell, digits) in [
+        (0, vec![1, 2]),
+        (1, vec![1, 3]),
+        (2, vec![3, 4]),
+        (3, vec![2, 4]),
+    ] {
+        masks[cell] = 511 ^ digits.iter().fold(0, |m, d| m | (1 << (d - 1)));
+    }
+    masks
+}
+
+#[test]
+fn aic_and_wxyz_both_available_and_chain_is_stable_and_structured() {
+    let puzzle = "0".repeat(81);
+    let exclusions = ring();
+    let before = exclusions.clone();
+    let aic = search_teaching_hint(&puzzle, &puzzle, &exclusions, "aic", 200_000).unwrap();
+    assert_eq!(aic.status, "found");
+    let hint = &aic.hints[0];
+    assert_eq!(hint.proof.kind, "chain");
+    assert_eq!(hint.proof.links.len() + 1, hint.proof.nodes.len());
+    assert!(hint.proof.links.iter().any(|l| l.kind == "strong"));
+    assert!(hint.proof.links.iter().any(|l| l.kind == "weak"));
+    assert_eq!(
+        search_teaching_hint(&puzzle, &puzzle, &exclusions, "wxyz_wing", 200_000)
+            .unwrap()
+            .status,
+        "found"
+    );
+    let wire = serde_json::to_value(hint).unwrap();
+    for _ in 0..20 {
+        let next = search_teaching_hint(&puzzle, &puzzle, &exclusions, "aic", 200_000).unwrap();
+        assert_eq!(serde_json::to_value(&next.hints[0]).unwrap(), wire);
+    }
+    let roundtrip: TeachingHint = serde_json::from_value(wire).unwrap();
+    assert_eq!(roundtrip.proof.nodes.len(), hint.proof.nodes.len());
+    assert_eq!(exclusions, before);
+}
+
+#[test]
+fn direct_search_never_guesses_and_reports_invalid_or_incomplete_positions() {
+    let blank = "0".repeat(81);
+    assert_eq!(
+        search_teaching_hint(&blank, &blank, &[0; 81], "naked_single", 200_000)
+            .unwrap()
+            .status,
+        "not_found"
+    );
+    assert_eq!(
+        search_teaching_hint(&blank, &blank, &ring(), "aic", 1)
+            .unwrap()
+            .status,
+        "budget_exhausted"
+    );
+    assert_eq!(
+        search_teaching_hint(&blank, &blank, &ring(), "wxyz_wing", 1)
+            .unwrap()
+            .status,
+        "budget_exhausted"
+    );
+    assert_eq!(
+        search_teaching_hint(&blank, &blank, &[0; 81], "backtracking", 1)
+            .unwrap()
+            .status,
+        "unsupported"
+    );
+    let mut dead = vec![0; 81];
+    dead[0] = 511;
+    assert_eq!(
+        search_teaching_hint(&blank, &blank, &dead, "aic", 1)
+            .unwrap()
+            .status,
+        "contradictory"
+    );
+    let duplicate = format!("11{}", "0".repeat(79));
+    assert_eq!(
+        search_teaching_hint(&blank, &duplicate, &[0; 81], "aic", 1)
+            .unwrap()
+            .status,
+        "contradictory"
+    );
+}
+
+#[test]
+fn singles_have_numerical_house_metadata_and_preserve_clues() {
+    let solved =
+        "123456789456789123789123456234567891567891234891234567345678912678912345912345678";
+    let puzzle = format!("0{}", &solved[1..]);
+    let hint = search_teaching_hint(&puzzle, &puzzle, &[0; 81], "hidden_single", 100)
+        .unwrap()
+        .hints
+        .remove(0);
+    assert_eq!(
+        hint.placements,
+        vec![TeachingCandidate { cell: 0, digit: 1 }]
+    );
+    assert_eq!(hint.houses[0].kind, "row");
+    assert_eq!(hint.houses[0].index, 0);
+    assert!(search_teaching_hint(solved, &puzzle, &[0; 81], "hidden_single", 100).is_err());
+}
+
+#[test]
+fn teaching_xy_wing_has_three_bivalue_cells_and_never_labels_a_pair_as_a_wing() {
+    let blank = "0".repeat(81);
+    let mut exclusions = vec![0u16; 81];
+    for (cell, mask) in [(0, 3), (4, 5), (36, 6)] {
+        exclusions[cell] = 511 ^ mask;
+    }
+    let hint = search_teaching_hint(&blank, &blank, &exclusions, "xy_wing", 200_000)
+        .unwrap()
+        .hints
+        .remove(0);
+    assert_eq!(hint.source_cells, vec![0, 4, 36]);
+    assert_eq!(
+        hint.eliminations,
+        vec![TeachingCandidate { cell: 40, digit: 3 }]
+    );
+    assert_eq!(hint.proof.kind, "als");
+
+    exclusions.fill(0);
+    exclusions[0] = 511 ^ 3;
+    exclusions[1] = 511 ^ 3;
+    assert_eq!(
+        search_teaching_hint(&blank, &blank, &exclusions, "xy_wing", 200_000)
+            .unwrap()
+            .status,
+        "not_found"
+    );
+    assert_eq!(
+        search_teaching_hint(&blank, &blank, &exclusions, "naked_pair", 200_000)
+            .unwrap()
+            .status,
+        "found"
+    );
 }

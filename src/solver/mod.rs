@@ -14,7 +14,9 @@ pub(crate) mod fabric;
 mod fish_engine;
 mod search_budget;
 mod teaching;
+mod teaching_contract;
 mod teaching_forcing;
+mod teaching_proof;
 #[cfg(test)]
 mod teaching_tests;
 mod types;
@@ -32,11 +34,11 @@ pub use arithmetic::{
 };
 pub use arithmetic_replay::{ArithmeticReplay, ArithmeticState};
 pub use explain::{AlsProofDescriptor, ForcingSource, LinkType, Polarity, ProofCertificate};
-pub use teaching::{
-    search_teaching_hint, search_teaching_hint_with_options, TeachingBranch, TeachingCandidate,
-    TeachingConjugate, TeachingContradiction, TeachingDeduction, TeachingEvidence, TeachingGroup,
-    TeachingHint, TeachingHouse, TeachingLink, TeachingNode, TeachingProof, TeachingRelation,
-    TeachingSearchResult, TeachingUniqueness, TEACHING_TECHNIQUES,
+pub use teaching::{search_teaching_hint, search_teaching_hint_with_options, TEACHING_TECHNIQUES};
+pub use teaching_contract::{
+    TeachingBranch, TeachingCandidate, TeachingConjugate, TeachingContradiction, TeachingDeduction,
+    TeachingEvidence, TeachingGroup, TeachingHint, TeachingHouse, TeachingLink, TeachingNode,
+    TeachingProof, TeachingRelation, TeachingSearchResult, TeachingUniqueness,
 };
 pub use types::{Difficulty, Hint, HintType, Technique};
 
